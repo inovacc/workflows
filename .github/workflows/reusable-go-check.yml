@@ -85,7 +85,7 @@ jobs:
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+          govulncheck -show verbose ./...
 
   test:
     if: ${{ inputs.run-tests == true }}
