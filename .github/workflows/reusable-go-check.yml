@@ -1,3 +1,4 @@
+# .github/workflows/reusable-go-quality.yml
 name: Reusable Go Quality Workflow
 
 on:
@@ -18,25 +19,7 @@ on:
 
 jobs:
   setup:
-    runs-on: ubuntu-latest
-    outputs:
-      go-cache-path: ${{ steps.go-cache.outputs.cache-path }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: stable
-          cache: true
-
-      - name: Cache Go build
-        id: go-cache
-        run: echo "cache-path=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
-
-      - name: Run go generate
-        run: go generate ./...
+    uses: ./.github/workflows/reusable-go-setup.yml
 
   lint:
     needs: setup
@@ -44,7 +27,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: stable
