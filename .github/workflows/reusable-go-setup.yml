@@ -1,0 +1,57 @@
+# .github/workflows/reusable-go-setup.yml
+name: Reusable Go Setup
+
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        required: false
+        type: string
+        default: stable
+    outputs:
+      go-mod-exists:
+        description: "Whether go.mod exists"
+        value: ${{ jobs.setup.outputs.go-mod-exists }}
+      go-cache-path:
+        description: "Go cache path"
+        value: ${{ jobs.setup.outputs.go-cache-path }}
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      go-mod-exists: ${{ steps.check-go-mod.outputs.exists }}
+      go-cache-path: ${{ steps.go-cache.outputs.cache-path }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if go.mod exists
+        id: check-go-mod
+        run: |
+          if [ -f go.mod ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: true
+
+      - name: Tidy and verify go.mod
+        if: steps.check-go-mod.outputs.exists == 'true'
+        run: |
+          go mod tidy -v
+          go mod verify
+
+      - name: Run go generate
+        if: steps.check-go-mod.outputs.exists == 'true'
+        run: go generate ./...
+
+      - name: Cache Go build
+        id: go-cache
+        if: steps.check-go-mod.outputs.exists == 'true'
+        run: echo "cache-path=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
