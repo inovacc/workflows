@@ -3,6 +3,11 @@ name: Reusable Go Setup
 
 on:
   workflow_call:
+    inputs:
+      go-version:
+        required: false
+        type: string
+        default: stable
     outputs:
       go-mod-exists:
         description: "Whether go.mod exists"
@@ -33,8 +38,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: stable
+          go-version: ${{ inputs.go-version }}
           cache: true
+
+      - name: Tidy and verify go.mod
+        if: steps.check-go-mod.outputs.exists == 'true'
+        run: |
+          go mod tidy -v
+          go mod verify
 
       - name: Run go generate
         if: steps.check-go-mod.outputs.exists == 'true'
