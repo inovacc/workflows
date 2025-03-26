@@ -1,0 +1,102 @@
+name: Reusable Go Quality Workflow
+
+on:
+  workflow_call:
+    inputs:
+      run-tests:
+        required: false
+        type: boolean
+        default: true
+      run-lint:
+        required: false
+        type: boolean
+        default: true
+      run-vulncheck:
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      go-cache-path: ${{ steps.go-cache.outputs.cache-path }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'latest'
+          cache: true
+
+      - name: Cache Go build
+        id: go-cache
+        run: echo "::set-output name=cache-path::$(go env GOCACHE)"
+
+  lint:
+    needs: setup
+    if: ${{ inputs.run-lint == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'latest'
+          cache: true
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b . v1.56.2
+          ./golangci-lint run --timeout=3m
+
+  fmt:
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'latest'
+          cache: true
+
+      - name: gofmt check
+        run: |
+          fmt_out=$(gofmt -l .)
+          if [ -n "$fmt_out" ]; then
+            echo "Files not properly formatted:"
+            echo "$fmt_out"
+            exit 1
+          fi
+
+  vulncheck:
+    if: ${{ inputs.run-vulncheck == true }}
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'latest'
+          cache: true
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  test:
+    if: ${{ inputs.run-tests == true }}
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'latest'
+          cache: true
+
+      - name: Run tests
+        run: go test -v ./...
