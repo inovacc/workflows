@@ -33,7 +33,7 @@ jobs:
 
       - name: Cache Go build
         id: go-cache
-        run: echo "::set-output name=cache-path::$(go env GOCACHE)"
+        run: echo "cache-path=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
 
   lint:
     needs: setup
