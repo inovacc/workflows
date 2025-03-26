@@ -56,7 +56,7 @@ jobs:
           version: v2.0.2
 
   fmt:
-    needs: setup
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,7 +76,7 @@ jobs:
 
   vulncheck:
     if: ${{ inputs.run-vulncheck == true }}
-    needs: setup
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -92,7 +92,7 @@ jobs:
 
   test:
     if: ${{ inputs.run-tests == true }}
-    needs: setup
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,5 +101,22 @@ jobs:
           go-version: stable
           cache: true
 
-      - name: Run tests
-        run: go test -v -race -p=1 ./...
+      - name: Run tests with coverage
+        run: |
+          go test -race -p=1 -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out
+          go tool cover -html=coverage.out -o coverage.html
+
+      - name: Extract coverage percentage
+        id: coverage
+        run: |
+          percent=$(go tool cover -func=coverage.out | grep total: | awk '{print substr($3, 1, length($3)-1)}')
+          echo "coverage=$percent" >> $GITHUB_OUTPUT
+          echo "## Cobertura de Testes" >> $GITHUB_STEP_SUMMARY
+          go tool cover -func=coverage.out >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.*
