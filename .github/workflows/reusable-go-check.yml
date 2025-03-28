@@ -41,8 +41,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
-          args: --verbose
+          version: v2.0
 
   fmt:
     needs: lint
