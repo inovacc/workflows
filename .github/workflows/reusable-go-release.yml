@@ -1,3 +1,4 @@
+# .github/workflows/reusable-go-release.yml
 name: Release Binary Builder
 
 on:
