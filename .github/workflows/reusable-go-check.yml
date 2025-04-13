@@ -23,7 +23,7 @@ on:
 
 jobs:
   setup:
-    uses: ./.github/workflows/reusable-go-setup.yml
+    uses: inovacc/workflows/.github/workflows/reusable-go-setup.yml@main
     with:
       go-version: ${{ inputs.go-version }}
 
