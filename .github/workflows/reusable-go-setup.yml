@@ -24,7 +24,10 @@ jobs:
       go-cache-path: ${{ steps.go-cache.outputs.cache-path }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Check if go.mod exists
         id: check-go-mod
