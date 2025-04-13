@@ -8,6 +8,10 @@ permissions:
   contents: write
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      go-cache-path: ${{ steps.go-cache.outputs.cache-path }}
   release:
     name: Build release version
     runs-on: ubuntu-latest
@@ -19,8 +23,9 @@ jobs:
 
       - name: Set up Go
         uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
+        with: 
+          go-version: ${{ inputs.go-version }}
+          cache: true
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
