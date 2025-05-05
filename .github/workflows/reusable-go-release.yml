@@ -12,6 +12,14 @@ on:
         required: false
         type: boolean
         default: true
+      build-windows:
+        required: false
+        type: boolean
+        default: false
+      build-macos:
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -47,3 +55,5 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_WINDOWS: ${{ inputs.build-windows }}
+          BUILD_MACOS: ${{ inputs.build-macos }}
