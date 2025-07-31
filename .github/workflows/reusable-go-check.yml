@@ -89,6 +89,9 @@ jobs:
           go-version: ${{ inputs.go-version }}
           cache: true
 
+      - name: Download Go modules
+        run: go mod download
+
       - name: Run tests with coverage
         run: |
           go test -race -p=1 -coverprofile=coverage.out ./...
