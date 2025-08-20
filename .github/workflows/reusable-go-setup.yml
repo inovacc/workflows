@@ -12,19 +12,15 @@ on:
       go-mod-exists:
         description: "Whether go.mod exists"
         value: ${{ jobs.setup.outputs.go-mod-exists }}
-      go-cache-path:
-        description: "Go cache path"
-        value: ${{ jobs.setup.outputs.go-cache-path }}
 
 jobs:
   setup:
     runs-on: ubuntu-latest
     outputs:
       go-mod-exists: ${{ steps.check-go-mod.outputs.exists }}
-      go-cache-path: ${{ steps.go-cache.outputs.cache-path }}
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -53,8 +49,3 @@ jobs:
       - name: Run go generate
         if: steps.check-go-mod.outputs.exists == 'true'
         run: go generate ./...
-
-      - name: Cache Go build
-        id: go-cache
-        if: steps.check-go-mod.outputs.exists == 'true'
-        run: echo "cache-path=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"

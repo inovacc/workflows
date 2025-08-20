@@ -17,26 +17,24 @@ permissions:
   contents: write
 
 jobs:
-  setup:
-    uses: inovacc/workflows/.github/workflows/reusable-go-setup.yml@main
-    with:
-      go-version: ${{ inputs.go-version }}
-
   release:
-    name: Build release version
+    name: Build and Release Binary
     runs-on: ubuntu-latest
-    needs: setup
+    if: ${{ inputs.run-release == true }}
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
-        with: 
+        with:
           go-version: ${{ inputs.go-version }}
           cache: true
+
+      - name: Tidy Go modules
+        run: go mod tidy
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
