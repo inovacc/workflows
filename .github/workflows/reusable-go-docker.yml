@@ -1,0 +1,167 @@
+name: Reusable Go Docker Build
+
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        required: false
+        type: string
+        default: stable
+      dockerfile-path:
+        required: false
+        type: string
+        default: Dockerfile
+      image-name:
+        required: true
+        type: string
+        description: 'Docker image name (e.g., myapp or owner/myapp)'
+      image-tags:
+        required: false
+        type: string
+        default: latest
+        description: 'Comma-separated list of tags'
+      build-args:
+        required: false
+        type: string
+        default: ""
+        description: 'Docker build args (e.g., "ARG1=value1,ARG2=value2")'
+      platforms:
+        required: false
+        type: string
+        default: linux/amd64
+        description: 'Target platforms (e.g., "linux/amd64,linux/arm64")'
+      push:
+        required: false
+        type: boolean
+        default: true
+      registry:
+        required: false
+        type: string
+        default: ghcr.io
+        description: 'Docker registry (ghcr.io, docker.io, etc.)'
+      timeout-minutes:
+        required: false
+        type: number
+        default: 45
+    outputs:
+      image-digest:
+        description: "Docker image digest"
+        value: ${{ jobs.docker-build.outputs.digest }}
+      image-tags:
+        description: "Tags applied to image"
+        value: ${{ jobs.docker-build.outputs.tags }}
+      build-success:
+        description: "Whether build succeeded"
+        value: ${{ jobs.docker-build.outputs.success }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      digest: ${{ steps.docker-build.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
+      success: ${{ steps.build-result.outputs.success }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Dockerfile
+        run: |
+          if [ ! -f "${{ inputs.dockerfile-path }}" ]; then
+            echo "::error::Dockerfile not found at ${{ inputs.dockerfile-path }}"
+            exit 1
+          fi
+          echo "::notice::Dockerfile found at ${{ inputs.dockerfile-path }}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to registry
+        if: ${{ inputs.push }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.registry }}/${{ inputs.image-name }}
+          tags: |
+            type=raw,value=${{ inputs.image-tags }}
+            type=sha,prefix={{branch}}-
+            type=ref,event=tag
+            type=ref,event=pr
+
+      - name: Parse build args
+        id: build-args
+        run: |
+          BUILD_ARGS=""
+          if [ -n "${{ inputs.build-args }}" ]; then
+            IFS=',' read -ra ARGS <<< "${{ inputs.build-args }}"
+            for arg in "${ARGS[@]}"; do
+              BUILD_ARGS="${BUILD_ARGS} --build-arg ${arg}"
+            done
+          fi
+          # Add Go version as build arg
+          BUILD_ARGS="${BUILD_ARGS} --build-arg GO_VERSION=${{ inputs.go-version }}"
+          echo "args=${BUILD_ARGS}" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        id: docker-build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile-path }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GO_VERSION=${{ inputs.go-version }}
+            ${{ inputs.build-args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Set build result
+        id: build-result
+        run: |
+          if [ "${{ steps.docker-build.outcome }}" == "success" ]; then
+            echo "success=true" >> $GITHUB_OUTPUT
+            echo "::notice::Docker image built successfully"
+            echo "::notice::Digest: ${{ steps.docker-build.outputs.digest }}"
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "::error::Docker image build failed"
+            exit 1
+          fi
+
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "## Docker Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ inputs.registry }}/${{ inputs.image-name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:** \`${{ inputs.image-tags }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms:** \`${{ inputs.platforms }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Pushed:** \`${{ inputs.push }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.docker-build.outcome }}" == "success" ]; then
+            echo "**Digest:** \`${{ steps.docker-build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Build successful" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Build failed" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -8,22 +8,47 @@ on:
         required: false
         type: string
         default: stable
+      skip-generate:
+        required: false
+        type: boolean
+        default: false
+      skip-tidy:
+        required: false
+        type: boolean
+        default: false
+      fetch-depth:
+        required: false
+        type: number
+        default: 0
+      timeout-minutes:
+        required: false
+        type: number
+        default: 10
     outputs:
       go-mod-exists:
         description: "Whether go.mod exists"
         value: ${{ jobs.setup.outputs.go-mod-exists }}
+      go-version:
+        description: "Actual Go version installed"
+        value: ${{ jobs.setup.outputs.go-version }}
+      setup-success:
+        description: "Whether setup completed successfully"
+        value: ${{ jobs.setup.outputs.setup-success }}
 
 jobs:
   setup:
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       go-mod-exists: ${{ steps.check-go-mod.outputs.exists }}
+      go-version: ${{ steps.go-version.outputs.version }}
+      setup-success: ${{ steps.setup-result.outputs.success }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ inputs.fetch-depth }}
 
       - name: Check if go.mod exists
         id: check-go-mod
@@ -40,12 +65,35 @@ jobs:
           go-version: ${{ inputs.go-version }}
           cache: true
 
+      - name: Get Go version
+        id: go-version
+        run: |
+          VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "::notice::Using Go version ${VERSION}"
+
       - name: Tidy and verify go.mod
-        if: steps.check-go-mod.outputs.exists == 'true'
+        id: tidy
+        if: steps.check-go-mod.outputs.exists == 'true' && inputs.skip-tidy == false
         run: |
           go mod tidy -v
           go mod verify
+        continue-on-error: true
 
       - name: Run go generate
-        if: steps.check-go-mod.outputs.exists == 'true'
+        id: generate
+        if: steps.check-go-mod.outputs.exists == 'true' && inputs.skip-generate == false
         run: go generate ./...
+        continue-on-error: true
+
+      - name: Set setup result
+        id: setup-result
+        run: |
+          if [ "${{ steps.tidy.outcome }}" == "failure" ] || [ "${{ steps.generate.outcome }}" == "failure" ]; then
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "::error::Setup completed with errors"
+            exit 1
+          else
+            echo "success=true" >> $GITHUB_OUTPUT
+            echo "::notice::Setup completed successfully"
+          fi

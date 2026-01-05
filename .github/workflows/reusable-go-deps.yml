@@ -1,0 +1,189 @@
+name: Reusable Go Dependency Checker
+
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        required: false
+        type: string
+        default: stable
+      fail-on-outdated:
+        required: false
+        type: boolean
+        default: false
+      create-pr:
+        required: false
+        type: boolean
+        default: false
+      exclude-indirect:
+        required: false
+        type: boolean
+        default: true
+      timeout-minutes:
+        required: false
+        type: number
+        default: 20
+    outputs:
+      outdated-count:
+        description: "Number of outdated dependencies"
+        value: ${{ jobs.check-deps.outputs.outdated-count }}
+      outdated-deps:
+        description: "List of outdated dependencies"
+        value: ${{ jobs.check-deps.outputs.outdated-deps }}
+      updates-available:
+        description: "Whether updates are available"
+        value: ${{ jobs.check-deps.outputs.updates-available }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-deps:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      outdated-count: ${{ steps.analyze.outputs.count }}
+      outdated-deps: ${{ steps.analyze.outputs.deps }}
+      updates-available: ${{ steps.analyze.outputs.available }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: true
+
+      - name: Check for outdated dependencies
+        id: check
+        run: |
+          echo "Checking for outdated dependencies..."
+          go list -u -m -json all > deps.json
+
+      - name: Analyze dependencies
+        id: analyze
+        run: |
+          OUTDATED_COUNT=0
+          OUTDATED_DEPS=""
+          EXCLUDE_INDIRECT="${{ inputs.exclude-indirect }}"
+
+          echo "## Dependency Update Report" > report.md
+          echo "" >> report.md
+          echo "| Module | Current | Available | Type |" >> report.md
+          echo "|--------|---------|-----------|------|" >> report.md
+
+          while IFS= read -r line; do
+            # Parse JSON manually (simple approach)
+            if echo "$line" | grep -q '"Path"'; then
+              PATH_LINE="$line"
+            elif echo "$line" | grep -q '"Version"'; then
+              VERSION_LINE="$line"
+            elif echo "$line" | grep -q '"Update"'; then
+              UPDATE_LINE="$line"
+
+              # Extract values
+              MODULE=$(echo "$PATH_LINE" | sed 's/.*"Path": *"\([^"]*\)".*/\1/')
+              CURRENT=$(echo "$VERSION_LINE" | sed 's/.*"Version": *"\([^"]*\)".*/\1/')
+
+              # Check if there's an update
+              if echo "$UPDATE_LINE" | grep -q '"Version"'; then
+                AVAILABLE=$(echo "$UPDATE_LINE" | sed 's/.*"Version": *"\([^"]*\)".*/\1/')
+
+                # Check if indirect
+                IS_INDIRECT="false"
+                if echo "$line" | grep -q '"Indirect": *true'; then
+                  IS_INDIRECT="true"
+                fi
+
+                # Skip indirect if requested
+                if [ "$IS_INDIRECT" == "true" ] && [ "$EXCLUDE_INDIRECT" == "true" ]; then
+                  continue
+                fi
+
+                TYPE="direct"
+                if [ "$IS_INDIRECT" == "true" ]; then
+                  TYPE="indirect"
+                fi
+
+                echo "| \`$MODULE\` | \`$CURRENT\` | \`$AVAILABLE\` | $TYPE |" >> report.md
+                OUTDATED_COUNT=$((OUTDATED_COUNT + 1))
+                OUTDATED_DEPS="${OUTDATED_DEPS}${MODULE}@${AVAILABLE},"
+              fi
+            fi
+          done < <(cat deps.json | grep -E '"Path"|"Version"|"Update"|"Indirect"')
+
+          echo "count=$OUTDATED_COUNT" >> $GITHUB_OUTPUT
+          echo "deps=$OUTDATED_DEPS" >> $GITHUB_OUTPUT
+
+          if [ "$OUTDATED_COUNT" -gt 0 ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+          fi
+
+          cat report.md >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Total outdated dependencies:** $OUTDATED_COUNT" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check for security advisories
+        id: security
+        run: |
+          echo "## Security Advisories" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          if govulncheck ./... 2>&1 | tee vuln.txt; then
+            echo "✅ No known vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Vulnerabilities found - see details above" >> $GITHUB_STEP_SUMMARY
+            cat vuln.txt >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Update dependencies
+        id: update
+        if: ${{ inputs.create-pr && steps.analyze.outputs.available == 'true' }}
+        run: |
+          echo "Updating dependencies..."
+          go get -u ./...
+          go mod tidy
+
+      - name: Create Pull Request
+        if: ${{ inputs.create-pr && steps.analyze.outputs.available == 'true' }}
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update Go dependencies"
+          title: "chore: update Go dependencies"
+          body: |
+            ## Dependency Updates
+
+            This PR updates the following dependencies:
+
+            ${{ steps.analyze.outputs.deps }}
+
+            **Count:** ${{ steps.analyze.outputs.count }} dependencies
+
+            ---
+            🤖 Auto-generated by reusable-go-deps workflow
+          branch: deps/auto-update-${{ github.run_number }}
+          delete-branch: true
+          labels: dependencies
+
+      - name: Fail on outdated
+        if: ${{ inputs.fail-on-outdated && steps.analyze.outputs.available == 'true' }}
+        run: |
+          echo "::error::Found ${{ steps.analyze.outputs.count }} outdated dependencies"
+          exit 1
+
+      - name: Upload dependency report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-report
+          path: |
+            report.md
+            deps.json
+            vuln.txt

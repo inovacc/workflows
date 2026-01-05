@@ -1,0 +1,183 @@
+name: Reusable Go Benchmark
+
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        required: false
+        type: string
+        default: stable
+      benchmark-flags:
+        required: false
+        type: string
+        default: "-benchmem"
+      benchmark-pattern:
+        required: false
+        type: string
+        default: "."
+        description: 'Benchmark pattern (e.g., "BenchmarkFoo" or ".")'
+      benchmark-time:
+        required: false
+        type: string
+        default: "1s"
+        description: 'Benchmark duration (e.g., "1s", "10s")'
+      compare-with:
+        required: false
+        type: string
+        default: ""
+        description: 'Git ref to compare against (e.g., "main", "v1.0.0")'
+      fail-on-regression:
+        required: false
+        type: boolean
+        default: false
+      regression-threshold:
+        required: false
+        type: number
+        default: 10
+        description: 'Percentage threshold for regression detection'
+      timeout-minutes:
+        required: false
+        type: number
+        default: 30
+    outputs:
+      benchmark-results:
+        description: "Benchmark results summary"
+        value: ${{ jobs.benchmark.outputs.results }}
+      regression-detected:
+        description: "Whether regression was detected"
+        value: ${{ jobs.benchmark.outputs.regression }}
+      baseline-comparison:
+        description: "Comparison with baseline if provided"
+        value: ${{ jobs.benchmark.outputs.comparison }}
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      results: ${{ steps.run-bench.outputs.results }}
+      regression: ${{ steps.compare.outputs.regression }}
+      comparison: ${{ steps.compare.outputs.comparison }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: true
+
+      - name: Run benchmarks (current)
+        id: run-bench
+        run: |
+          echo "Running benchmarks..."
+          go test -bench=${{ inputs.benchmark-pattern }} \
+            -benchtime=${{ inputs.benchmark-time }} \
+            ${{ inputs.benchmark-flags }} \
+            ./... | tee current-bench.txt
+
+          # Extract summary
+          RESULTS=$(grep -E "^Benchmark" current-bench.txt | wc -l)
+          echo "results=$RESULTS benchmarks executed" >> $GITHUB_OUTPUT
+
+      - name: Install benchstat
+        if: ${{ inputs.compare-with != '' }}
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: Run baseline benchmarks
+        id: baseline
+        if: ${{ inputs.compare-with != '' }}
+        run: |
+          echo "Checking out baseline: ${{ inputs.compare-with }}"
+          git fetch origin ${{ inputs.compare-with }}
+          git checkout ${{ inputs.compare-with }}
+
+          echo "Running baseline benchmarks..."
+          go test -bench=${{ inputs.benchmark-pattern }} \
+            -benchtime=${{ inputs.benchmark-time }} \
+            ${{ inputs.benchmark-flags }} \
+            ./... | tee baseline-bench.txt
+
+          git checkout -
+
+      - name: Compare benchmarks
+        id: compare
+        if: ${{ inputs.compare-with != '' }}
+        run: |
+          echo "## Benchmark Comparison" > comparison.md
+          echo "" >> comparison.md
+          echo "Comparing current benchmarks with \`${{ inputs.compare-with }}\`" >> comparison.md
+          echo "" >> comparison.md
+          echo "\`\`\`" >> comparison.md
+          benchstat baseline-bench.txt current-bench.txt | tee -a comparison.md
+          echo "\`\`\`" >> comparison.md
+
+          cat comparison.md >> $GITHUB_STEP_SUMMARY
+
+          # Check for regressions
+          REGRESSION="false"
+          COMPARISON=$(cat comparison.md)
+
+          # Simple regression detection: look for significant slowdowns
+          # This is a simplified check - benchstat output shows +X% or -X%
+          if grep -E '\+[0-9]+\.[0-9]+%' comparison.md; then
+            SLOWDOWNS=$(grep -oE '\+([0-9]+\.[0-9]+)%' comparison.md | sed 's/+//' | sed 's/%//')
+            for slowdown in $SLOWDOWNS; do
+              if (( $(echo "$slowdown > ${{ inputs.regression-threshold }}" | bc -l) )); then
+                REGRESSION="true"
+                echo "::warning::Performance regression detected: ${slowdown}% slowdown"
+                break
+              fi
+            done
+          fi
+
+          echo "regression=$REGRESSION" >> $GITHUB_OUTPUT
+          echo "comparison<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMPARISON" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Generate benchmark report
+        if: always()
+        run: |
+          echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Go Version:** ${{ inputs.go-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Pattern:** \`${{ inputs.benchmark-pattern }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Duration:** ${{ inputs.benchmark-time }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Flags:** \`${{ inputs.benchmark-flags }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Current Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          cat current-bench.txt >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.compare-with }}" != "" ]; then
+            if [ "${{ steps.compare.outputs.regression }}" == "true" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "⚠️ **Performance regression detected!**" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "✅ No significant performance regression detected" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            current-bench.txt
+            baseline-bench.txt
+            comparison.md
+          if-no-files-found: ignore
+
+      - name: Fail on regression
+        if: ${{ inputs.fail-on-regression && steps.compare.outputs.regression == 'true' }}
+        run: |
+          echo "::error::Performance regression detected above threshold (${{ inputs.regression-threshold }}%)"
+          exit 1

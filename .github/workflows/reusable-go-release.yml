@@ -12,6 +12,36 @@ on:
         required: false
         type: boolean
         default: true
+      goreleaser-version:
+        required: false
+        type: string
+        default: latest
+      goreleaser-args:
+        required: false
+        type: string
+        default: release --clean
+      skip-validate:
+        required: false
+        type: boolean
+        default: false
+      draft:
+        required: false
+        type: boolean
+        default: false
+      timeout-minutes:
+        required: false
+        type: number
+        default: 30
+    outputs:
+      release-url:
+        description: "URL to the created release"
+        value: ${{ jobs.release.outputs.release-url }}
+      release-tag:
+        description: "Tag name of the release"
+        value: ${{ jobs.release.outputs.release-tag }}
+      release-created:
+        description: "Whether release was successfully created"
+        value: ${{ jobs.release.outputs.release-created }}
 
 permissions:
   contents: write
@@ -20,7 +50,12 @@ jobs:
   release:
     name: Build and Release Binary
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     if: ${{ inputs.run-release == true }}
+    outputs:
+      release-url: ${{ steps.release-info.outputs.url }}
+      release-tag: ${{ steps.release-info.outputs.tag }}
+      release-created: ${{ steps.goreleaser.outcome == 'success' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,15 +68,48 @@ jobs:
           go-version: ${{ inputs.go-version }}
           cache: true
 
+      - name: Extract tag info
+        id: tag-info
+        run: |
+          if [[ "${GITHUB_REF}" =~ ^refs/tags/(.+)$ ]]; then
+            TAG="${BASH_REMATCH[1]}"
+            echo "tag=${TAG}" >> $GITHUB_OUTPUT
+            echo "::notice::Building release for tag ${TAG}"
+          else
+            echo "::error::Not a tag push, cannot create release"
+            exit 1
+          fi
+
+      - name: Validate .goreleaser.yaml
+        if: ${{ inputs.skip-validate == false }}
+        run: |
+          if [ ! -f .goreleaser.yaml ] && [ ! -f .goreleaser.yml ]; then
+            echo "::error::.goreleaser.yaml or .goreleaser.yml not found"
+            exit 1
+          fi
+          echo "::notice::GoReleaser config found"
+
       - name: Tidy Go modules
         run: go mod tidy
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        id: goreleaser
         if: startsWith(github.ref, 'refs/tags/')
+        uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: '~> v2'
-          args: release --clean
+          version: ${{ inputs.goreleaser-version }}
+          args: ${{ inputs.goreleaser-args }} ${{ inputs.draft && '--draft' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set release info
+        id: release-info
+        if: steps.goreleaser.outcome == 'success'
+        run: |
+          TAG="${{ steps.tag-info.outputs.tag }}"
+          REPO="${{ github.repository }}"
+          URL="https://github.com/${REPO}/releases/tag/${TAG}"
+          echo "url=${URL}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "::notice::Release created at ${URL}"

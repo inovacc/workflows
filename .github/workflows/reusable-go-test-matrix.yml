@@ -1,0 +1,121 @@
+name: Reusable Go Multi-Version Test
+
+on:
+  workflow_call:
+    inputs:
+      go-versions:
+        required: true
+        type: string
+        description: 'JSON array of Go versions (e.g., ''["1.21", "1.22", "1.23"]'')'
+      test-flags:
+        required: false
+        type: string
+        default: ""
+      test-timeout:
+        required: false
+        type: string
+        default: "10m"
+      run-race:
+        required: false
+        type: boolean
+        default: true
+      fail-fast:
+        required: false
+        type: boolean
+        default: false
+      timeout-minutes:
+        required: false
+        type: number
+        default: 30
+    outputs:
+      all-passed:
+        description: "Whether all version tests passed"
+        value: ${{ jobs.test-matrix.result == 'success' }}
+      results-summary:
+        description: "Summary of test results"
+        value: ${{ jobs.summarize.outputs.summary }}
+
+jobs:
+  test-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    strategy:
+      fail-fast: ${{ inputs.fail-fast }}
+      matrix:
+        go-version: ${{ fromJSON(inputs.go-versions) }}
+    name: Test on Go ${{ matrix.go-version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Run tests
+        run: |
+          RACE_FLAG=""
+          if [ "${{ inputs.run-race }}" == "true" ]; then
+            RACE_FLAG="-race"
+          fi
+          go test $RACE_FLAG -timeout=${{ inputs.test-timeout }} ${{ inputs.test-flags }} ./...
+
+      - name: Save result
+        if: always()
+        run: |
+          mkdir -p test-results
+          echo "Go ${{ matrix.go-version }}: ${{ job.status }}" > test-results/go-${{ matrix.go-version }}.txt
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-result-${{ matrix.go-version }}
+          path: test-results/
+
+  summarize:
+    runs-on: ubuntu-latest
+    needs: test-matrix
+    if: always()
+    outputs:
+      summary: ${{ steps.create-summary.outputs.summary }}
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: test-result-*
+          merge-multiple: true
+          path: all-results
+
+      - name: Create summary
+        id: create-summary
+        run: |
+          echo "## Multi-Version Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Go Version | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          SUMMARY=""
+          for file in all-results/*.txt; do
+            if [ -f "$file" ]; then
+              content=$(cat "$file")
+              echo "| $content |" >> $GITHUB_STEP_SUMMARY
+              SUMMARY="${SUMMARY}${content}; "
+            fi
+          done
+
+          echo "summary=${SUMMARY}" >> $GITHUB_OUTPUT
+
+          if [ "${{ needs.test-matrix.result }}" == "success" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ All tests passed across all Go versions" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Some tests failed" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
