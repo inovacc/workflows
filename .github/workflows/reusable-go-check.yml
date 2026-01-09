@@ -87,7 +87,7 @@ jobs:
       - name: Run golangci-lint
         id: golangci-lint
         if: ${{ inputs.run-lint == true }}
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ inputs.golangci-lint-version }}
         continue-on-error: true
