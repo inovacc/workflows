@@ -75,6 +75,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Configure git safe directory (container mode)
+        if: ${{ inputs.use-container }}
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Set up Go (host mode)
         if: ${{ !inputs.use-container }}
         uses: actions/setup-go@v5

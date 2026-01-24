@@ -65,6 +65,10 @@ jobs:
         with:
           fetch-depth: ${{ inputs.fetch-depth }}
 
+      - name: Configure git safe directory (container mode)
+        if: ${{ inputs.use-container }}
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Check if go.mod exists
         id: check-go-mod
         run: |
