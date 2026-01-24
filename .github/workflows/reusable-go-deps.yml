@@ -148,13 +148,6 @@ jobs:
         if: ${{ !inputs.use-container }}
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
-      - name: Install govulncheck (container mode)
-        if: ${{ inputs.use-container }}
-        run: |
-          if ! command -v govulncheck &> /dev/null; then
-            go install golang.org/x/vuln/cmd/govulncheck@latest
-          fi
-
       - name: Check for security advisories
         id: security
         run: |
