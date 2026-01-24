@@ -15,8 +15,42 @@ jobs:
   test:
     uses: inovacc/workflows/.github/workflows/reusable-go-check.yml@main
     with:
-      go-version: "1.23"
       coverage-threshold: 80
+```
+
+## Container Mode
+
+All workflows (except `reusable-go-docker.yml`) run inside the [Mjolnir](https://github.com/inovacc/mjolnir) container by default, providing a consistent build environment with pre-installed tools.
+
+### Benefits
+
+- **Pre-installed tools**: Go 1.25, golangci-lint, govulncheck, goreleaser, benchstat
+- **Consistent environment**: Same tools and versions across all builds
+- **Faster startup**: No need to download and install tools
+- **Smaller cache footprint**: Tools don't need to be cached
+
+### Container Inputs
+
+These inputs are available on all container-enabled workflows:
+
+| Input | Type | Default | Description |
+|-------|------|---------|-------------|
+| `use-container` | boolean | `true`* | Use Mjolnir container for builds |
+| `container-image` | string | `ghcr.io/inovacc/mjolnir:latest-alpine` | Container image to use |
+
+*`reusable-go-test-matrix.yml` defaults to `false` since it needs multiple Go versions.
+
+### Opting Out
+
+To use traditional host-based mode with `actions/setup-go`:
+
+```yaml
+jobs:
+  check:
+    uses: inovacc/workflows/.github/workflows/reusable-go-check.yml@main
+    with:
+      use-container: false
+      go-version: "1.23"
 ```
 
 ## Available Workflows
@@ -55,28 +89,41 @@ jobs:
     uses: inovacc/workflows/.github/workflows/reusable-go-setup.yml@main
 ```
 
-**Full Example:**
+**Full Example (container mode - default):**
 ```yaml
 jobs:
   setup:
     uses: inovacc/workflows/.github/workflows/reusable-go-setup.yml@main
     with:
-      go-version: "1.23"
       skip-tidy: false
       skip-generate: false
       fetch-depth: 0
       timeout-minutes: 10
 ```
 
+**Full Example (host mode):**
+```yaml
+jobs:
+  setup:
+    uses: inovacc/workflows/.github/workflows/reusable-go-setup.yml@main
+    with:
+      use-container: false
+      go-version: "1.23"
+      skip-tidy: false
+      skip-generate: false
+```
+
 **Inputs:**
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `go-version` | string | `stable` | Go version to install |
+| `go-version` | string | `stable` | Go version (host mode only) |
 | `skip-tidy` | boolean | `false` | Skip `go mod tidy` |
 | `skip-generate` | boolean | `false` | Skip `go generate` |
 | `fetch-depth` | number | `0` | Git checkout depth (0 = full history) |
 | `timeout-minutes` | number | `10` | Job timeout |
+| `use-container` | boolean | `true` | Use Mjolnir container |
+| `container-image` | string | `ghcr.io/inovacc/mjolnir:latest-alpine` | Container image |
 
 **Outputs:**
 
@@ -85,6 +132,7 @@ jobs:
 | `go-mod-exists` | Whether go.mod exists |
 | `go-version` | Actual Go version installed |
 | `setup-success` | Whether setup completed successfully |
+| `using-container` | Whether container mode was used |
 
 ---
 
@@ -101,35 +149,44 @@ jobs:
     uses: inovacc/workflows/.github/workflows/reusable-go-check.yml@main
 ```
 
-**Full Example:**
+**Full Example (container mode - default):**
 ```yaml
 jobs:
   check:
     uses: inovacc/workflows/.github/workflows/reusable-go-check.yml@main
     with:
-      go-version: "1.23"
       run-tests: true
       run-lint: true
       run-vulncheck: true
-      golangci-lint-version: "latest"
       test-flags: "-v"
       test-timeout: "10m"
       test-parallelism: 4
       coverage-threshold: 80
       fail-on-vulncheck: true
-      skip-format-check: false
       timeout-minutes: 30
+```
+
+**Full Example (host mode):**
+```yaml
+jobs:
+  check:
+    uses: inovacc/workflows/.github/workflows/reusable-go-check.yml@main
+    with:
+      use-container: false
+      go-version: "1.23"
+      golangci-lint-version: "latest"
+      coverage-threshold: 80
 ```
 
 **Inputs:**
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `go-version` | string | `stable` | Go version to use |
+| `go-version` | string | `stable` | Go version (host mode only) |
 | `run-tests` | boolean | `true` | Run tests |
 | `run-lint` | boolean | `true` | Run linting |
 | `run-vulncheck` | boolean | `true` | Run vulnerability check |
-| `golangci-lint-version` | string | `latest` | golangci-lint version |
+| `golangci-lint-version` | string | `latest` | golangci-lint version (host mode only) |
 | `test-flags` | string | `""` | Additional test flags |
 | `test-timeout` | string | `"10m"` | Test timeout |
 | `test-parallelism` | number | `1` | Number of parallel test executions |
@@ -137,6 +194,8 @@ jobs:
 | `fail-on-vulncheck` | boolean | `true` | Fail if vulnerabilities found |
 | `skip-format-check` | boolean | `false` | Skip gofmt check |
 | `timeout-minutes` | number | `30` | Job timeout |
+| `use-container` | boolean | `true` | Use Mjolnir container |
+| `container-image` | string | `ghcr.io/inovacc/mjolnir:latest-alpine` | Container image |
 
 **Outputs:**
 
@@ -195,13 +254,15 @@ jobs:
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `go-version` | string | `stable` | Go version to use |
+| `go-version` | string | `stable` | Go version (host mode only) |
 | `run-release` | boolean | `true` | Whether to run release |
-| `goreleaser-version` | string | `latest` | GoReleaser version |
+| `goreleaser-version` | string | `latest` | GoReleaser version (host mode only) |
 | `goreleaser-args` | string | `release --clean` | GoReleaser arguments |
 | `skip-validate` | boolean | `false` | Skip .goreleaser.yaml validation |
 | `draft` | boolean | `false` | Create draft release |
 | `timeout-minutes` | number | `30` | Job timeout |
+| `use-container` | boolean | `true` | Use Mjolnir container |
+| `container-image` | string | `ghcr.io/inovacc/mjolnir:latest-alpine` | Container image |
 
 **Outputs:**
 
@@ -256,6 +317,8 @@ jobs:
 | `run-race` | boolean | `true` | Run with race detector |
 | `fail-fast` | boolean | `false` | Stop on first failure |
 | `timeout-minutes` | number | `30` | Job timeout |
+| `use-container` | boolean | `false` | Use Mjolnir container (warns if multiple versions) |
+| `container-image` | string | `ghcr.io/inovacc/mjolnir:latest-alpine` | Container image |
 
 **Outputs:**
 
@@ -264,6 +327,8 @@ jobs:
 | `all-passed` | Whether all version tests passed |
 | `results-summary` | Summary of test results |
 
+> **Note:** Container mode defaults to `false` for this workflow because it requires testing across multiple Go versions. The container uses a fixed Go version.
+
 ---
 
 ### Go Docker
@@ -271,6 +336,8 @@ jobs:
 **File:** `reusable-go-docker.yml`
 
 Build and push Docker images with multi-platform support.
+
+> **Note:** This workflow does not support container mode because it requires the host Docker socket for buildx.
 
 **Permissions Required:**
 ```yaml
@@ -381,11 +448,13 @@ jobs:
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `go-version` | string | `stable` | Go version to use |
+| `go-version` | string | `stable` | Go version (host mode only) |
 | `fail-on-outdated` | boolean | `false` | Fail if outdated deps found |
 | `create-pr` | boolean | `false` | Auto-create PR with updates |
 | `exclude-indirect` | boolean | `true` | Exclude indirect dependencies |
 | `timeout-minutes` | number | `20` | Job timeout |
+| `use-container` | boolean | `true` | Use Mjolnir container |
+| `container-image` | string | `ghcr.io/inovacc/mjolnir:latest-alpine` | Container image |
 
 **Outputs:**
 
@@ -397,7 +466,7 @@ jobs:
 
 **Features:**
 - Checks for outdated dependencies
-- Security advisory scanning with govulncheck
+- Security advisory scanning with govulncheck (pre-installed in container)
 - Auto-creates PRs with dependency updates
 - Detailed dependency report in job summary
 
@@ -436,7 +505,7 @@ jobs:
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `go-version` | string | `stable` | Go version to use |
+| `go-version` | string | `stable` | Go version (host mode only) |
 | `benchmark-flags` | string | `-benchmem` | Benchmark flags |
 | `benchmark-pattern` | string | `.` | Benchmark pattern (e.g., "BenchmarkFoo") |
 | `benchmark-time` | string | `"1s"` | Benchmark duration |
@@ -444,6 +513,8 @@ jobs:
 | `fail-on-regression` | boolean | `false` | Fail if regression detected |
 | `regression-threshold` | number | `10` | Regression threshold (%) |
 | `timeout-minutes` | number | `30` | Job timeout |
+| `use-container` | boolean | `true` | Use Mjolnir container |
+| `container-image` | string | `ghcr.io/inovacc/mjolnir:latest-alpine` | Container image |
 
 **Outputs:**
 
@@ -455,7 +526,7 @@ jobs:
 
 **Features:**
 - Run benchmarks with customizable patterns and duration
-- Compare against baseline using benchstat
+- Compare against baseline using benchstat (pre-installed in container)
 - Statistical regression detection
 - Performance metrics in job summary
 
@@ -474,17 +545,18 @@ on:
   pull_request:
 
 jobs:
+  # Uses container mode by default (Go 1.25 from Mjolnir)
   test:
     uses: inovacc/workflows/.github/workflows/reusable-go-check.yml@main
     with:
-      go-version: "1.23"
       coverage-threshold: 80
       test-parallelism: 4
 
+  # Uses host mode for multi-version testing
   multi-version:
     uses: inovacc/workflows/.github/workflows/reusable-go-test-matrix.yml@main
     with:
-      go-versions: '["1.21", "1.22", "1.23"]'
+      go-versions: '["1.22", "1.23", "1.24"]'
 ```
 
 ### Release Pipeline
@@ -497,10 +569,9 @@ on:
     tags: ['v*']
 
 jobs:
+  # Uses container mode by default (GoReleaser pre-installed)
   release:
     uses: inovacc/workflows/.github/workflows/reusable-go-release.yml@main
-    with:
-      go-version: "1.23"
     permissions:
       contents: write
 

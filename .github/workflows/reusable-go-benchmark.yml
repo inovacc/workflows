@@ -39,6 +39,16 @@ on:
         required: false
         type: number
         default: 30
+      use-container:
+        required: false
+        type: boolean
+        default: true
+        description: 'Use Mjolnir container for builds (provides pre-installed Go toolchain and benchstat)'
+      container-image:
+        required: false
+        type: string
+        default: 'ghcr.io/inovacc/mjolnir:latest-alpine'
+        description: 'Container image to use when use-container is true'
     outputs:
       benchmark-results:
         description: "Benchmark results summary"
@@ -53,6 +63,7 @@ on:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
+    container: ${{ inputs.use-container && inputs.container-image || '' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       results: ${{ steps.run-bench.outputs.results }}
@@ -64,7 +75,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
+      - name: Set up Go (host mode)
+        if: ${{ !inputs.use-container }}
         uses: actions/setup-go@v5
         with:
           go-version: ${{ inputs.go-version }}
@@ -83,8 +95,8 @@ jobs:
           RESULTS=$(grep -E "^Benchmark" current-bench.txt | wc -l)
           echo "results=$RESULTS benchmarks executed" >> $GITHUB_OUTPUT
 
-      - name: Install benchstat
-        if: ${{ inputs.compare-with != '' }}
+      - name: Install benchstat (host mode)
+        if: ${{ inputs.compare-with != '' && !inputs.use-container }}
         run: go install golang.org/x/perf/cmd/benchstat@latest
 
       - name: Run baseline benchmarks

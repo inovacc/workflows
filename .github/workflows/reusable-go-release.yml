@@ -32,6 +32,16 @@ on:
         required: false
         type: number
         default: 30
+      use-container:
+        required: false
+        type: boolean
+        default: true
+        description: 'Use Mjolnir container for builds (provides pre-installed Go toolchain and GoReleaser)'
+      container-image:
+        required: false
+        type: string
+        default: 'ghcr.io/inovacc/mjolnir:latest-alpine'
+        description: 'Container image to use when use-container is true'
     outputs:
       release-url:
         description: "URL to the created release"
@@ -50,19 +60,21 @@ jobs:
   release:
     name: Build and Release Binary
     runs-on: ubuntu-latest
+    container: ${{ inputs.use-container && inputs.container-image || '' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     if: ${{ inputs.run-release == true }}
     outputs:
       release-url: ${{ steps.release-info.outputs.url }}
       release-tag: ${{ steps.release-info.outputs.tag }}
-      release-created: ${{ steps.goreleaser.outcome == 'success' }}
+      release-created: ${{ steps.goreleaser-container.outcome == 'success' || steps.goreleaser-host.outcome == 'success' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Go
+      - name: Set up Go (host mode)
+        if: ${{ !inputs.use-container }}
         uses: actions/setup-go@v5
         with:
           go-version: ${{ inputs.go-version }}
@@ -92,9 +104,16 @@ jobs:
       - name: Tidy Go modules
         run: go mod tidy
 
-      - name: Run GoReleaser
-        id: goreleaser
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Run GoReleaser (container mode)
+        id: goreleaser-container
+        if: ${{ startsWith(github.ref, 'refs/tags/') && inputs.use-container }}
+        run: goreleaser ${{ inputs.goreleaser-args }} ${{ inputs.draft && '--draft' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run GoReleaser (host mode)
+        id: goreleaser-host
+        if: ${{ startsWith(github.ref, 'refs/tags/') && !inputs.use-container }}
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -105,7 +124,7 @@ jobs:
 
       - name: Set release info
         id: release-info
-        if: steps.goreleaser.outcome == 'success'
+        if: ${{ steps.goreleaser-container.outcome == 'success' || steps.goreleaser-host.outcome == 'success' }}
         run: |
           TAG="${{ steps.tag-info.outputs.tag }}"
           REPO="${{ github.repository }}"

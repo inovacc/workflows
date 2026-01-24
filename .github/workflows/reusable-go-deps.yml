@@ -23,6 +23,16 @@ on:
         required: false
         type: number
         default: 20
+      use-container:
+        required: false
+        type: boolean
+        default: true
+        description: 'Use Mjolnir container for builds (provides pre-installed Go toolchain and govulncheck)'
+      container-image:
+        required: false
+        type: string
+        default: 'ghcr.io/inovacc/mjolnir:latest-alpine'
+        description: 'Container image to use when use-container is true'
     outputs:
       outdated-count:
         description: "Number of outdated dependencies"
@@ -41,6 +51,7 @@ permissions:
 jobs:
   check-deps:
     runs-on: ubuntu-latest
+    container: ${{ inputs.use-container && inputs.container-image || '' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       outdated-count: ${{ steps.analyze.outputs.count }}
@@ -50,7 +61,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Go
+      - name: Set up Go (host mode)
+        if: ${{ !inputs.use-container }}
         uses: actions/setup-go@v5
         with:
           go-version: ${{ inputs.go-version }}
@@ -128,13 +140,16 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Total outdated dependencies:** $OUTDATED_COUNT" >> $GITHUB_STEP_SUMMARY
 
+      - name: Install govulncheck (host mode)
+        if: ${{ !inputs.use-container }}
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
       - name: Check for security advisories
         id: security
         run: |
           echo "## Security Advisories" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          go install golang.org/x/vuln/cmd/govulncheck@latest
           if govulncheck ./... 2>&1 | tee vuln.txt; then
             echo "✅ No known vulnerabilities found" >> $GITHUB_STEP_SUMMARY
           else

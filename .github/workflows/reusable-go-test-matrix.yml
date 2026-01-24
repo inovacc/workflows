@@ -27,6 +27,16 @@ on:
         required: false
         type: number
         default: 30
+      use-container:
+        required: false
+        type: boolean
+        default: false
+        description: 'Use Mjolnir container for builds (default: false for multi-version testing)'
+      container-image:
+        required: false
+        type: string
+        default: 'ghcr.io/inovacc/mjolnir:latest-alpine'
+        description: 'Container image to use when use-container is true (note: uses fixed Go version)'
     outputs:
       all-passed:
         description: "Whether all version tests passed"
@@ -38,6 +48,7 @@ on:
 jobs:
   test-matrix:
     runs-on: ubuntu-latest
+    container: ${{ inputs.use-container && inputs.container-image || '' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     strategy:
       fail-fast: ${{ inputs.fail-fast }}
@@ -45,10 +56,17 @@ jobs:
         go-version: ${{ fromJSON(inputs.go-versions) }}
     name: Test on Go ${{ matrix.go-version }}
     steps:
+      - name: Warn about container mode with multiple versions
+        if: ${{ inputs.use-container && fromJSON(inputs.go-versions)[1] != null }}
+        run: |
+          echo "::warning::Container mode uses a fixed Go version. Multiple go-versions specified will be ignored in container mode."
+          echo "::warning::Container Go version: $(go version)"
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Go ${{ matrix.go-version }}
+      - name: Set up Go ${{ matrix.go-version }} (host mode)
+        if: ${{ !inputs.use-container }}
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}

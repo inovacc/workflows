@@ -6,6 +6,82 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repository contains reusable GitHub Actions workflows for Go projects. These workflows are designed to be called from other repositories via `uses: inovacc/workflows/.github/workflows/<workflow-name>@main` to standardize Go project CI/CD.
 
+## GitHub Actions Build Container
+
+**Always use Mjolnir as the build container for GitHub Actions workflows.**
+- Repository: https://github.com/inovacc/mjolnir
+- Registry: `ghcr.io/inovacc/mjolnir`
+
+**Available Tags:**
+| Tag | Base | Size | Description |
+|-----|------|------|-------------|
+| `latest-alpine` | golang:1.25-alpine | ~700MB | Lightweight, recommended for most builds |
+| `latest` | golang:1.25 | ~1.6GB | Full Debian with more tools |
+
+**Included Tools:**
+- **Go Ecosystem:** Go 1.25, Task, GoReleaser, SQLC, Protoc 33.4, protoc-gen-go, protoc-gen-go-grpc
+- **Node.js:** Node.js, npm, pnpm, Bun
+- **Other:** Python 3, GCC, Rust (stable), Cargo, Hadolint, Trivy
+
+**Usage in Workflows:**
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/inovacc/mjolnir:latest-alpine
+    steps:
+      - uses: actions/checkout@v4
+      - run: task build
+```
+
+**Usage in Dockerfiles:**
+```dockerfile
+FROM ghcr.io/inovacc/mjolnir:latest-alpine AS builder
+WORKDIR /app
+COPY . .
+RUN task build
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /app/bin/myapp /app/myapp
+ENTRYPOINT ["/app/myapp"]
+```
+
+## Container Mode
+
+All workflows (except `reusable-go-docker.yml`) support running inside the Mjolnir container for a consistent build environment with pre-installed tools.
+
+### Common Container Inputs
+
+These inputs are available on all workflows that support container mode:
+
+| Input | Type | Default | Description |
+|-------|------|---------|-------------|
+| `use-container` | bool | `true`* | Use Mjolnir container for builds |
+| `container-image` | string | `ghcr.io/inovacc/mjolnir:latest-alpine` | Container image to use |
+
+*`reusable-go-test-matrix.yml` defaults to `false` since it needs multiple Go versions.
+
+### Container Mode Benefits
+
+- **Pre-installed tools**: Go 1.25, golangci-lint, govulncheck, goreleaser, benchstat
+- **Consistent environment**: Same tools and versions across all builds
+- **Faster startup**: No need to download and install tools
+- **Smaller cache footprint**: Tools don't need to be cached
+
+### Opting Out of Container Mode
+
+To use the traditional host-based mode with `actions/setup-go`:
+
+```yaml
+jobs:
+  check:
+    uses: inovacc/workflows/.github/workflows/reusable-go-check.yml@main
+    with:
+      use-container: false
+      go-version: "1.23"
+```
+
 ## Available Workflows
 
 ### Core Workflows
@@ -18,18 +94,22 @@ Foundation workflow for Go environment setup.
 - Optionally runs `go mod tidy` and `go mod verify`
 - Optionally runs `go generate ./...`
 - Configurable git fetch depth for performance
+- Container mode support (default: ON)
 
 **Important Inputs:**
-- `go-version` (string, default: "stable")
+- `go-version` (string, default: "stable") - only used in host mode
 - `skip-tidy` (bool, default: false) - skip go mod tidy
 - `skip-generate` (bool, default: false) - skip go generate
 - `fetch-depth` (number, default: 0) - git checkout depth
 - `timeout-minutes` (number, default: 10)
+- `use-container` (bool, default: true) - use Mjolnir container
+- `container-image` (string, default: "ghcr.io/inovacc/mjolnir:latest-alpine")
 
 **Outputs:**
 - `go-mod-exists` - whether go.mod exists
 - `go-version` - actual Go version installed
 - `setup-success` - whether setup completed successfully
+- `using-container` - whether container mode was used
 
 #### reusable-go-check.yml
 Comprehensive quality assurance workflow with configurable checks.
@@ -37,17 +117,18 @@ Comprehensive quality assurance workflow with configurable checks.
 **Key Features:**
 - Configurable golangci-lint (default: "latest")
 - Optional Go format checking with gofmt
-- Govulncheck for vulnerability scanning (cached)
+- Govulncheck for vulnerability scanning (pre-installed in container)
 - Tests with race detection and coverage
 - Coverage threshold enforcement
 - Configurable test parallelism
+- Container mode support (default: ON)
 
 **Important Inputs:**
-- `go-version` (string, default: "stable")
+- `go-version` (string, default: "stable") - only used in host mode
 - `run-tests` (bool, default: true)
 - `run-lint` (bool, default: true)
 - `run-vulncheck` (bool, default: true)
-- `golangci-lint-version` (string, default: "latest")
+- `golangci-lint-version` (string, default: "latest") - only used in host mode
 - `test-flags` (string, default: "") - additional test flags
 - `test-timeout` (string, default: "10m")
 - `test-parallelism` (number, default: 1) - -p flag for go test
@@ -55,6 +136,8 @@ Comprehensive quality assurance workflow with configurable checks.
 - `fail-on-vulncheck` (bool, default: true)
 - `skip-format-check` (bool, default: false)
 - `timeout-minutes` (number, default: 30)
+- `use-container` (bool, default: true) - use Mjolnir container
+- `container-image` (string, default: "ghcr.io/inovacc/mjolnir:latest-alpine")
 
 **Outputs:**
 - `coverage-percent` - test coverage percentage
@@ -71,15 +154,18 @@ Binary release workflow using GoReleaser.
 - Tag validation and extraction
 - Optional draft releases
 - Release metadata outputs
+- Container mode support (default: ON) - uses pre-installed goreleaser
 
 **Important Inputs:**
-- `go-version` (string, default: "stable")
+- `go-version` (string, default: "stable") - only used in host mode
 - `run-release` (bool, default: true)
-- `goreleaser-version` (string, default: "latest")
+- `goreleaser-version` (string, default: "latest") - only used in host mode
 - `goreleaser-args` (string, default: "release --clean")
 - `skip-validate` (bool, default: false) - skip .goreleaser.yaml validation
 - `draft` (bool, default: false) - create draft release
 - `timeout-minutes` (number, default: 30)
+- `use-container` (bool, default: true) - use Mjolnir container
+- `container-image` (string, default: "ghcr.io/inovacc/mjolnir:latest-alpine")
 
 **Outputs:**
 - `release-url` - URL to the created release
@@ -96,6 +182,7 @@ Multi-version testing using matrix strategy.
 - Configurable fail-fast behavior
 - Aggregated test results summary
 - Race detection support
+- Container mode support (default: OFF for multi-version testing)
 
 **Important Inputs:**
 - `go-versions` (string, required) - JSON array like `'["1.21", "1.22", "1.23"]'`
@@ -104,6 +191,8 @@ Multi-version testing using matrix strategy.
 - `run-race` (bool, default: true)
 - `fail-fast` (bool, default: false)
 - `timeout-minutes` (number, default: 30)
+- `use-container` (bool, default: false) - use Mjolnir container (warns if multiple versions specified)
+- `container-image` (string, default: "ghcr.io/inovacc/mjolnir:latest-alpine")
 
 **Outputs:**
 - `all-passed` - whether all version tests passed
@@ -119,6 +208,8 @@ jobs:
       run-race: true
 ```
 
+**Note:** Container mode defaults to OFF for this workflow because it requires testing across multiple Go versions. The container has a fixed Go version, so enabling container mode will show a warning if multiple versions are specified.
+
 #### reusable-go-docker.yml
 Docker image build and push workflow.
 
@@ -128,6 +219,7 @@ Docker image build and push workflow.
 - Docker layer caching (GitHub Actions cache)
 - SBOM and provenance generation
 - Build args support
+- **No container mode** - requires host Docker socket for buildx
 
 **Important Inputs:**
 - `image-name` (string, required) - Docker image name
@@ -147,22 +239,27 @@ Docker image build and push workflow.
 
 **Permissions Required:** `contents: read`, `packages: write`
 
+**Note:** This workflow does not support container mode because it uses `docker/setup-buildx-action` which requires the host Docker socket.
+
 #### reusable-go-deps.yml
 Dependency update checker and auto-PR creator.
 
 **Key Features:**
 - Checks for outdated dependencies using `go list -u`
 - Optional exclusion of indirect dependencies
-- Security advisory checking with govulncheck
+- Security advisory checking with govulncheck (pre-installed in container)
 - Auto-create PR with dependency updates
 - Detailed dependency report
+- Container mode support (default: ON)
 
 **Important Inputs:**
-- `go-version` (string, default: "stable")
+- `go-version` (string, default: "stable") - only used in host mode
 - `fail-on-outdated` (bool, default: false)
 - `create-pr` (bool, default: false) - auto-create update PR
 - `exclude-indirect` (bool, default: true)
 - `timeout-minutes` (number, default: 20)
+- `use-container` (bool, default: true) - use Mjolnir container
+- `container-image` (string, default: "ghcr.io/inovacc/mjolnir:latest-alpine")
 
 **Outputs:**
 - `outdated-count` - number of outdated dependencies
@@ -178,11 +275,12 @@ Benchmark runner with baseline comparison.
 - Run Go benchmarks with configurable patterns
 - Compare against baseline (e.g., main branch)
 - Regression detection with configurable threshold
-- Uses benchstat for statistical comparison
+- Uses benchstat for statistical comparison (pre-installed in container)
 - Performance metrics in job summary
+- Container mode support (default: ON)
 
 **Important Inputs:**
-- `go-version` (string, default: "stable")
+- `go-version` (string, default: "stable") - only used in host mode
 - `benchmark-flags` (string, default: "-benchmem")
 - `benchmark-pattern` (string, default: ".") - e.g., "BenchmarkFoo"
 - `benchmark-time` (string, default: "1s")
@@ -190,6 +288,8 @@ Benchmark runner with baseline comparison.
 - `fail-on-regression` (bool, default: false)
 - `regression-threshold` (number, default: 10) - percentage threshold
 - `timeout-minutes` (number, default: 30)
+- `use-container` (bool, default: true) - use Mjolnir container
+- `container-image` (string, default: "ghcr.io/inovacc/mjolnir:latest-alpine")
 
 **Outputs:**
 - `benchmark-results` - benchmark results summary
@@ -270,10 +370,12 @@ Since these are reusable workflows, test changes by:
 ## Design Principles
 
 - **Backward Compatible**: All new inputs have defaults matching previous behavior
+- **Container First**: Container mode is the default for most workflows, providing consistent environments
+- **Opt-Out Design**: Use `use-container: false` to fall back to host-based setup when needed
 - **Configurable Timeouts**: All workflows have `timeout-minutes` to prevent hung jobs
 - **Rich Outputs**: All workflows provide outputs for workflow chaining
 - **Error Handling**: Strategic use of `continue-on-error` with failure reporting
-- **Performance**: Aggressive caching (Go cache, Docker layers, tool binaries)
+- **Performance**: Pre-installed tools in container mode, aggressive caching in host mode
 - **Single Module Focus**: No monorepo support - keeps workflows simple
 
 ## Go Version Compatibility

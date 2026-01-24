@@ -51,6 +51,16 @@ on:
         required: false
         type: number
         default: 30
+      use-container:
+        required: false
+        type: boolean
+        default: true
+        description: 'Use Mjolnir container for builds (provides pre-installed Go toolchain and tools)'
+      container-image:
+        required: false
+        type: string
+        default: 'ghcr.io/inovacc/mjolnir:latest-alpine'
+        description: 'Container image to use when use-container is true'
     outputs:
       coverage-percent:
         description: "Test coverage percentage"
@@ -68,6 +78,7 @@ on:
 jobs:
   quality-check:
     runs-on: ubuntu-latest
+    container: ${{ inputs.use-container && inputs.container-image || '' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       coverage: ${{ steps.coverage.outputs.coverage }}
@@ -78,15 +89,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Go
+      - name: Setup Go (host mode)
+        if: ${{ !inputs.use-container }}
         uses: actions/setup-go@v5
         with:
           go-version: ${{ inputs.go-version }}
           cache: true
 
-      - name: Run golangci-lint
-        id: golangci-lint
-        if: ${{ inputs.run-lint == true }}
+      - name: Run golangci-lint (container mode)
+        id: golangci-lint-container
+        if: ${{ inputs.run-lint == true && inputs.use-container }}
+        run: golangci-lint run ./...
+        continue-on-error: true
+
+      - name: Run golangci-lint (host mode)
+        id: golangci-lint-host
+        if: ${{ inputs.run-lint == true && !inputs.use-container }}
         uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ inputs.golangci-lint-version }}
@@ -108,27 +126,32 @@ jobs:
         id: lint-result
         if: ${{ inputs.run-lint == true }}
         run: |
-          if [ "${{ steps.golangci-lint.outcome }}" == "failure" ] || [ "${{ steps.gofmt.outcome }}" == "failure" ]; then
+          LINT_OUTCOME="${{ inputs.use-container && steps.golangci-lint-container.outcome || steps.golangci-lint-host.outcome }}"
+          if [ "$LINT_OUTCOME" == "failure" ] || [ "${{ steps.gofmt.outcome }}" == "failure" ]; then
             echo "passed=false" >> $GITHUB_OUTPUT
             exit 1
           else
             echo "passed=true" >> $GITHUB_OUTPUT
           fi
-      - name: Cache govulncheck
-        if: ${{ inputs.run-vulncheck == true }}
+
+      - name: Cache govulncheck (host mode)
+        if: ${{ inputs.run-vulncheck == true && !inputs.use-container }}
         uses: actions/cache@v4
         with:
           path: ~/go/bin/govulncheck
           key: govulncheck-${{ runner.os }}
 
-      - name: Run vulncheck
-        id: vulncheck
-        if: ${{ inputs.run-vulncheck == true }}
+      - name: Install govulncheck (host mode)
+        if: ${{ inputs.run-vulncheck == true && !inputs.use-container }}
         run: |
           if [ ! -f ~/go/bin/govulncheck ]; then
             go install golang.org/x/vuln/cmd/govulncheck@latest
           fi
-          govulncheck -show verbose ./...
+
+      - name: Run vulncheck
+        id: vulncheck
+        if: ${{ inputs.run-vulncheck == true }}
+        run: govulncheck -show verbose ./...
         continue-on-error: ${{ !inputs.fail-on-vulncheck }}
 
       - name: Set vulncheck result
