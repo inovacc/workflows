@@ -174,7 +174,7 @@ jobs:
     with:
       use-container: false
       go-version: "1.23"
-      golangci-lint-version: "latest"
+      golangci-lint-version: "v2.8.0"
       coverage-threshold: 80
 ```
 
@@ -186,7 +186,7 @@ jobs:
 | `run-tests` | boolean | `true` | Run tests |
 | `run-lint` | boolean | `true` | Run linting |
 | `run-vulncheck` | boolean | `true` | Run vulnerability check |
-| `golangci-lint-version` | string | `latest` | golangci-lint version (host mode only) |
+| `golangci-lint-version` | string | `v2.8.0` | golangci-lint version (host mode only) |
 | `test-flags` | string | `""` | Additional test flags |
 | `test-timeout` | string | `"10m"` | Test timeout |
 | `test-parallelism` | number | `1` | Number of parallel test executions |

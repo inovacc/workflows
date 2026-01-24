@@ -22,7 +22,7 @@ on:
       golangci-lint-version:
         required: false
         type: string
-        default: latest
+        default: v2.8.0
       test-flags:
         required: false
         type: string
@@ -88,6 +88,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git safe directory (container mode)
+        if: ${{ inputs.use-container }}
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Setup Go (host mode)
         if: ${{ !inputs.use-container }}
@@ -100,6 +106,8 @@ jobs:
         id: golangci-lint-container
         if: ${{ inputs.run-lint == true && inputs.use-container }}
         run: golangci-lint run ./...
+        env:
+          GOFLAGS: "-buildvcs=false"
         continue-on-error: true
 
       - name: Run golangci-lint (host mode)
@@ -145,6 +153,13 @@ jobs:
         if: ${{ inputs.run-vulncheck == true && !inputs.use-container }}
         run: |
           if [ ! -f ~/go/bin/govulncheck ]; then
+            go install golang.org/x/vuln/cmd/govulncheck@latest
+          fi
+
+      - name: Install govulncheck (container mode)
+        if: ${{ inputs.run-vulncheck == true && inputs.use-container }}
+        run: |
+          if ! command -v govulncheck &> /dev/null; then
             go install golang.org/x/vuln/cmd/govulncheck@latest
           fi
 

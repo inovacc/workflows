@@ -128,7 +128,7 @@ Comprehensive quality assurance workflow with configurable checks.
 - `run-tests` (bool, default: true)
 - `run-lint` (bool, default: true)
 - `run-vulncheck` (bool, default: true)
-- `golangci-lint-version` (string, default: "latest") - only used in host mode
+- `golangci-lint-version` (string, default: "v2.8.0") - only used in host mode
 - `test-flags` (string, default: "") - additional test flags
 - `test-timeout` (string, default: "10m")
 - `test-parallelism` (number, default: 1) - -p flag for go test
