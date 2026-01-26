@@ -86,6 +86,7 @@ jobs:
 
       - name: Extract tag info
         id: tag-info
+        shell: bash
         run: |
           if [[ "${GITHUB_REF}" =~ ^refs/tags/(.+)$ ]]; then
             TAG="${BASH_REMATCH[1]}"
