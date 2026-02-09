@@ -12,6 +12,11 @@ on:
         required: false
         type: boolean
         default: true
+      library-mode:
+        required: false
+        type: boolean
+        default: false
+        description: 'Library mode: create a GitHub release with notes instead of building binaries with GoReleaser'
       goreleaser-version:
         required: false
         type: string
@@ -66,7 +71,7 @@ jobs:
     outputs:
       release-url: ${{ steps.release-info.outputs.url }}
       release-tag: ${{ steps.release-info.outputs.tag }}
-      release-created: ${{ steps.goreleaser-container.outcome == 'success' || steps.goreleaser-host.outcome == 'success' }}
+      release-created: ${{ steps.goreleaser-container.outcome == 'success' || steps.goreleaser-host.outcome == 'success' || steps.library-release.outcome == 'success' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -98,7 +103,7 @@ jobs:
           fi
 
       - name: Validate .goreleaser.yaml
-        if: ${{ inputs.skip-validate == false }}
+        if: ${{ inputs.skip-validate == false && inputs.library-mode == false }}
         run: |
           if [ ! -f .goreleaser.yaml ] && [ ! -f .goreleaser.yml ]; then
             echo "::error::.goreleaser.yaml or .goreleaser.yml not found"
@@ -109,16 +114,32 @@ jobs:
       - name: Tidy Go modules
         run: go mod tidy
 
+      - name: Create library release
+        id: library-release
+        if: ${{ inputs.library-mode == true && startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          TAG="${{ steps.tag-info.outputs.tag }}"
+          DRAFT_FLAG=""
+          if [ "${{ inputs.draft }}" == "true" ]; then
+            DRAFT_FLAG="--draft"
+          fi
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            $DRAFT_FLAG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run GoReleaser (container mode)
         id: goreleaser-container
-        if: ${{ startsWith(github.ref, 'refs/tags/') && inputs.use-container }}
+        if: ${{ inputs.library-mode == false && startsWith(github.ref, 'refs/tags/') && inputs.use-container }}
         run: goreleaser ${{ inputs.goreleaser-args }} ${{ inputs.draft && '--draft' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run GoReleaser (host mode)
         id: goreleaser-host
-        if: ${{ startsWith(github.ref, 'refs/tags/') && !inputs.use-container }}
+        if: ${{ inputs.library-mode == false && startsWith(github.ref, 'refs/tags/') && !inputs.use-container }}
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -129,7 +150,7 @@ jobs:
 
       - name: Set release info
         id: release-info
-        if: ${{ steps.goreleaser-container.outcome == 'success' || steps.goreleaser-host.outcome == 'success' }}
+        if: ${{ steps.goreleaser-container.outcome == 'success' || steps.goreleaser-host.outcome == 'success' || steps.library-release.outcome == 'success' }}
         run: |
           TAG="${{ steps.tag-info.outputs.tag }}"
           REPO="${{ github.repository }}"

@@ -43,6 +43,11 @@ on:
         required: false
         type: boolean
         default: true
+      vulncheck-skip-stdlib:
+        required: false
+        type: boolean
+        default: false
+        description: 'Only fail on vulnerabilities in third-party dependencies, not the Go standard library'
       skip-format-check:
         required: false
         type: boolean
@@ -166,20 +171,35 @@ jobs:
       - name: Run vulncheck
         id: vulncheck
         if: ${{ inputs.run-vulncheck == true }}
-        run: govulncheck -show verbose ./...
-        continue-on-error: ${{ !inputs.fail-on-vulncheck }}
+        run: |
+          set +e
+          govulncheck -show verbose ./... 2>&1 | tee vulncheck-output.txt
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
 
-      - name: Set vulncheck result
+      - name: Evaluate vulncheck results
         id: vulncheck-result
         if: ${{ inputs.run-vulncheck == true }}
         run: |
-          if [ "${{ steps.vulncheck.outcome }}" == "failure" ]; then
-            echo "passed=false" >> $GITHUB_OUTPUT
-            if [ "${{ inputs.fail-on-vulncheck }}" == "true" ]; then
-              exit 1
-            fi
-          else
+          EXIT_CODE="${{ steps.vulncheck.outputs.exit_code }}"
+          if [ "$EXIT_CODE" == "0" ]; then
             echo "passed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # When vulncheck-skip-stdlib is true, only fail if third-party module vulnerabilities exist
+          if [ "${{ inputs.vulncheck-skip-stdlib }}" == "true" ]; then
+            # govulncheck prints "No other vulnerabilities found." under Module Results when only stdlib is affected
+            if grep -q "No other vulnerabilities found" vulncheck-output.txt; then
+              echo "::notice::Only stdlib vulnerabilities found, skipping failure (vulncheck-skip-stdlib=true)"
+              echo "passed=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+
+          echo "passed=false" >> $GITHUB_OUTPUT
+          if [ "${{ inputs.fail-on-vulncheck }}" == "true" ]; then
+            exit 1
           fi
 
       - name: Download Go modules
