@@ -7,7 +7,7 @@ on:
       go-version:
         required: false
         type: string
-        default: stable
+        default: "1.26"
       run-release:
         required: false
         type: boolean
@@ -84,7 +84,7 @@ jobs:
 
       - name: Set up Go (host mode)
         if: ${{ !inputs.use-container }}
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ inputs.go-version }}
           cache: true
