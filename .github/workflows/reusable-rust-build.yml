@@ -1,0 +1,91 @@
+name: Reusable Rust Release Build
+
+on:
+  workflow_call:
+    inputs:
+      rust-toolchain:
+        required: false
+        type: string
+        default: stable
+      working-directory:
+        required: false
+        type: string
+        default: .
+      targets:
+        required: false
+        type: string
+        default: '["host"]'
+        description: JSON array of Rust targets, or host
+      all-features:
+        required: false
+        type: boolean
+        default: false
+      package:
+        required: false
+        type: string
+        default: ""
+      timeout-minutes:
+        required: false
+        type: number
+        default: 45
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Rust release (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.targets) }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "${{ inputs.rust-toolchain }}" --profile minimal
+          rustup default "${{ inputs.rust-toolchain }}"
+
+      - name: Install target
+        if: ${{ matrix.target != 'host' }}
+        run: rustup target add "${{ matrix.target }}"
+
+      - name: Cache Cargo dependencies and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ inputs.working-directory }}
+          shared-key: rust-release-${{ inputs.rust-toolchain }}-${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Build release
+        run: |
+          args="--workspace --release"
+          if [ -n "${{ inputs.package }}" ]; then
+            args="--package ${{ inputs.package }} --release"
+          fi
+          if [ "${{ matrix.target }}" != "host" ]; then
+            args="$args --target ${{ matrix.target }}"
+          fi
+          if [ "${{ inputs.all-features }}" = "true" ]; then
+            args="$args --all-features"
+          fi
+          cargo build $args
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-release-${{ matrix.target }}
+          path: |
+            ${{ inputs.working-directory }}/target/release
+            ${{ inputs.working-directory }}/target/${{ matrix.target }}/release
+          if-no-files-found: warn
+          retention-days: 7

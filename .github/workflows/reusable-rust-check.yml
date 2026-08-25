@@ -1,0 +1,103 @@
+name: Reusable Rust Quality Workflow
+
+on:
+  workflow_call:
+    inputs:
+      rust-toolchain:
+        required: false
+        type: string
+        default: stable
+        description: Rust toolchain or channel to install
+      working-directory:
+        required: false
+        type: string
+        default: .
+      all-features:
+        required: false
+        type: boolean
+        default: false
+      test-flags:
+        required: false
+        type: string
+        default: ""
+      run-tests:
+        required: false
+        type: boolean
+        default: true
+      run-clippy:
+        required: false
+        type: boolean
+        default: true
+      run-format:
+        required: false
+        type: boolean
+        default: true
+      timeout-minutes:
+        required: false
+        type: number
+        default: 30
+    outputs:
+      checks-passed:
+        description: Whether all enabled Rust checks passed
+        value: ${{ jobs.rust-checks.result == 'success' }}
+
+permissions:
+  contents: read
+
+jobs:
+  rust-checks:
+    name: Rust ${{ matrix.check }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [format, test, clippy]
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "${{ inputs.rust-toolchain }}" \
+            --profile minimal --component rustfmt --component clippy
+          rustup default "${{ inputs.rust-toolchain }}"
+
+      - name: Cache Cargo dependencies and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ inputs.working-directory }}
+          shared-key: rust-${{ inputs.rust-toolchain }}-${{ matrix.check }}
+          cache-on-failure: true
+
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Check formatting
+        if: ${{ matrix.check == 'format' && inputs.run-format }}
+        run: cargo fmt --all -- --check
+
+      - name: Test workspace
+        if: ${{ matrix.check == 'test' && inputs.run-tests }}
+        run: |
+          if [ "${{ inputs.all-features }}" = "true" ]; then
+            cargo test --workspace --all-features ${{ inputs.test-flags }}
+          else
+            cargo test --workspace ${{ inputs.test-flags }}
+          fi
+
+      - name: Lint workspace
+        if: ${{ matrix.check == 'clippy' && inputs.run-clippy }}
+        run: |
+          if [ "${{ inputs.all-features }}" = "true" ]; then
+            cargo clippy --workspace --all-targets --all-features -- -D warnings
+          else
+            cargo clippy --workspace --all-targets -- -D warnings
+          fi

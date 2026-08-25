@@ -10,6 +10,8 @@ This document outlines the current reusable GitHub Actions workflows and planned
 - [x] **reusable-go-setup.yml** - Go environment setup with caching
 - [x] **reusable-go-check.yml** - Tests, linting, vulnerability scanning
 - [x] **reusable-go-release.yml** - GoReleaser-based releases
+- [x] **reusable-rust-check.yml** - Parallel Cargo test, Clippy, and rustfmt checks
+- [x] **reusable-rust-build.yml** - Cached release builds across target matrices
 
 ### Advanced Workflows
 - [x] **reusable-go-test-matrix.yml** - Multi-version Go testing
@@ -52,11 +54,6 @@ This document outlines the current reusable GitHub Actions workflows and planned
 ## Mid-term (v1.2.0)
 
 ### Multi-Language Support
-- [ ] **reusable-rust-check.yml** - Rust CI workflow
-  - Cargo test, clippy, fmt
-  - MSRV testing
-  - Cross-compilation
-
 - [ ] **reusable-node-check.yml** - Node.js CI workflow
   - npm/pnpm/yarn support
   - ESLint, Prettier
