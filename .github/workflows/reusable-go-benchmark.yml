@@ -6,7 +6,7 @@ on:
       go-version:
         required: false
         type: string
-        default: "1.26"
+        default: "1.27.0"
       benchmark-flags:
         required: false
         type: string

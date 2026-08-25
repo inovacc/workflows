@@ -50,7 +50,7 @@ jobs:
     uses: inovacc/workflows/.github/workflows/reusable-go-check.yml@main
     with:
       use-container: false
-      go-version: "1.26"
+      go-version: "1.27.0"
 ```
 
 ## Available Workflows
@@ -148,7 +148,7 @@ jobs:
     uses: inovacc/workflows/.github/workflows/reusable-go-setup.yml@main
     with:
       use-container: false
-      go-version: "1.26"
+      go-version: "1.27.0"
       skip-tidy: false
       skip-generate: false
 ```
@@ -157,7 +157,7 @@ jobs:
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `go-version` | string | `1.26` | Go version (host mode only) |
+| `go-version` | string | `1.27.0` | Go version (host mode only) |
 | `skip-tidy` | boolean | `false` | Skip `go mod tidy` |
 | `skip-generate` | boolean | `false` | Skip `go generate` |
 | `fetch-depth` | number | `0` | Git checkout depth (0 = full history) |
@@ -213,7 +213,7 @@ jobs:
     uses: inovacc/workflows/.github/workflows/reusable-go-check.yml@main
     with:
       use-container: false
-      go-version: "1.26"
+      go-version: "1.27.0"
       golangci-lint-version: "v2.8.0"
       coverage-threshold: 80
 ```
@@ -222,7 +222,7 @@ jobs:
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `go-version` | string | `1.26` | Go version (host mode only) |
+| `go-version` | string | `1.27.0` | Go version (host mode only) |
 | `run-tests` | boolean | `true` | Run tests |
 | `run-lint` | boolean | `true` | Run linting |
 | `run-vulncheck` | boolean | `true` | Run vulnerability check |
@@ -280,7 +280,7 @@ jobs:
   release:
     uses: inovacc/workflows/.github/workflows/reusable-go-release.yml@main
     with:
-      go-version: "1.26"
+      go-version: "1.27.0"
       goreleaser-version: "latest"
       goreleaser-args: "release --clean"
       skip-validate: false
@@ -294,7 +294,7 @@ jobs:
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `go-version` | string | `1.26` | Go version (host mode only) |
+| `go-version` | string | `1.27.0` | Go version (host mode only) |
 | `run-release` | boolean | `true` | Whether to run release |
 | `goreleaser-version` | string | `latest` | GoReleaser version (host mode only) |
 | `goreleaser-args` | string | `release --clean` | GoReleaser arguments |
@@ -330,7 +330,7 @@ jobs:
   test-matrix:
     uses: inovacc/workflows/.github/workflows/reusable-go-test-matrix.yml@main
     with:
-      go-versions: '["1.24", "1.25", "1.26"]'
+      go-versions: '["1.25", "1.26", "1.27.0"]'
 ```
 
 **Full Example:**
@@ -339,7 +339,7 @@ jobs:
   test-matrix:
     uses: inovacc/workflows/.github/workflows/reusable-go-test-matrix.yml@main
     with:
-      go-versions: '["1.24", "1.25", "1.26"]'
+      go-versions: '["1.25", "1.26", "1.27.0"]'
       test-flags: "-v"
       test-timeout: "10m"
       run-race: true
@@ -404,7 +404,7 @@ jobs:
   docker:
     uses: inovacc/workflows/.github/workflows/reusable-go-docker.yml@main
     with:
-      go-version: "1.26"
+      go-version: "1.27.0"
       dockerfile-path: "Dockerfile"
       image-name: ${{ github.repository }}
       image-tags: "latest,${{ github.sha }}"
@@ -423,7 +423,7 @@ jobs:
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
 | `image-name` | string | *required* | Docker image name |
-| `go-version` | string | `1.26` | Go version (passed as build arg) |
+| `go-version` | string | `1.27.0` | Go version (passed as build arg) |
 | `dockerfile-path` | string | `Dockerfile` | Path to Dockerfile |
 | `image-tags` | string | `latest` | Comma-separated tags |
 | `build-args` | string | `""` | Build args (comma-separated) |
@@ -474,7 +474,7 @@ jobs:
   deps:
     uses: inovacc/workflows/.github/workflows/reusable-go-deps.yml@main
     with:
-      go-version: "1.26"
+      go-version: "1.27.0"
       fail-on-outdated: false
       create-pr: true
       exclude-indirect: true
@@ -488,7 +488,7 @@ jobs:
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `go-version` | string | `1.26` | Go version (host mode only) |
+| `go-version` | string | `1.27.0` | Go version (host mode only) |
 | `fail-on-outdated` | boolean | `false` | Fail if outdated deps found |
 | `create-pr` | boolean | `false` | Auto-create PR with updates |
 | `exclude-indirect` | boolean | `true` | Exclude indirect dependencies |
@@ -531,7 +531,7 @@ jobs:
   benchmark:
     uses: inovacc/workflows/.github/workflows/reusable-go-benchmark.yml@main
     with:
-      go-version: "1.26"
+      go-version: "1.27.0"
       benchmark-flags: "-benchmem"
       benchmark-pattern: "."
       benchmark-time: "5s"
@@ -545,7 +545,7 @@ jobs:
 
 | Input | Type | Default | Description |
 |-------|------|---------|-------------|
-| `go-version` | string | `1.26` | Go version (host mode only) |
+| `go-version` | string | `1.27.0` | Go version (host mode only) |
 | `benchmark-flags` | string | `-benchmem` | Benchmark flags |
 | `benchmark-pattern` | string | `.` | Benchmark pattern (e.g., "BenchmarkFoo") |
 | `benchmark-time` | string | `"1s"` | Benchmark duration |
@@ -596,7 +596,7 @@ jobs:
   multi-version:
     uses: inovacc/workflows/.github/workflows/reusable-go-test-matrix.yml@main
     with:
-      go-versions: '["1.24", "1.25", "1.26"]'
+      go-versions: '["1.25", "1.26", "1.27.0"]'
 ```
 
 ### Release Pipeline
