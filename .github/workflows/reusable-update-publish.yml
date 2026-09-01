@@ -1,0 +1,317 @@
+name: Reusable Update Publish Workflow
+
+# Publishes release metadata to the inovacc update control plane (Cloudflare KV).
+#
+# GitHub stays the source of truth for binaries. Cloudflare KV holds only the catalogue and the
+# pointer to what is currently live, so a rollback is a pointer move rather than a rebuild.
+#
+# Two objects are written:
+#
+#   applications/<app>/<component>/releases/<version>    immutable — the audit record
+#   applications/<app>/<component>/channels/<ch>/latest  mutable   — what clients resolve
+#
+# Publishing and promoting are separate on purpose (`promote: false`). A release can be
+# published and verified before any client is pointed at it, which is what makes a staged
+# rollout possible at all. `reusable-update-promote.yml` moves the pointer afterwards, and is
+# also the rollback path.
+#
+# Contract: inovacc/knowledge_base -> updater/docs/protocol/PROTOCOL-v1.md
+
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        required: true
+        type: string
+        description: Application identifier, matching ^[a-z0-9][a-z0-9-]{0,63}$
+      component:
+        required: false
+        type: string
+        default: desktop
+        description: desktop | daemon | cli | service
+      runtime:
+        required: true
+        type: string
+        description: tauri | service | cli
+      channel:
+        required: false
+        type: string
+        default: stable
+        description: stable | beta | nightly | canary
+      version:
+        required: false
+        type: string
+        default: ""
+        description: SemVer without a leading v. Defaults to the release tag with v stripped.
+      manifest-path:
+        required: false
+        type: string
+        default: .update/release.json
+        description: >-
+          Caller-produced JSON carrying `artifacts` (keyed by <os>-<arch>) and optionally
+          `composition`, `minimum_version`, `mandatory` and `action`.
+      promote:
+        required: false
+        type: boolean
+        default: true
+        description: Move the channel pointer to this version. Set false for a staged rollout.
+      timeout-minutes:
+        required: false
+        type: number
+        default: 15
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+      CLOUDFLARE_UPDATE_KV_ID:
+        required: true
+    outputs:
+      version:
+        description: The version that was published
+        value: ${{ jobs.publish.outputs.version }}
+      promoted:
+        description: Whether the channel pointer was moved
+        value: ${{ jobs.publish.outputs.promoted }}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.app-id }} update metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      promoted: ${{ steps.promote.outcome == 'success' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install Wrangler
+        run: npm install --no-save wrangler@4
+
+      - name: Resolve and validate version
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          # A leading v is an error, not something to strip twice. The control plane parses
+          # versions strictly, and `v2.4.1` is unparseable there — better to fail here, in the
+          # pipeline, than to publish an entry every client resolves as `unknown`.
+          if [[ "$VERSION" =~ ^[vV] ]]; then
+            echo "::error::Version '$VERSION' has a leading v. Use bare SemVer."
+            exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$ ]]; then
+            echo "::error::Version '$VERSION' is not SemVer 2.0.0."
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${{ inputs.app-id }}/${{ inputs.component }} $VERSION to ${{ inputs.channel }}"
+
+      - name: Validate the manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          MANIFEST="${{ inputs.manifest-path }}"
+          test -f "$MANIFEST" || { echo "::error::$MANIFEST not found"; exit 1; }
+
+          node -e '
+            const m = require("path").resolve(process.argv[1]);
+            const j = require(m);
+            const fail = (s) => { console.log(`::error::${s}`); process.exitCode = 1; };
+
+            const arts = j.artifacts;
+            if (!arts || typeof arts !== "object" || !Object.keys(arts).length) {
+              fail("manifest has no artifacts");
+            } else {
+              for (const [platform, a] of Object.entries(arts)) {
+                if (!/^(windows|darwin|linux)-(x86_64|aarch64)$/.test(platform)) {
+                  fail(`artifact key "${platform}" is not <os>-<arch> from the known vocabulary`);
+                }
+                // All-or-nothing. Announcing an update a client cannot verify is worse than
+                // announcing nothing, so an incomplete artifact fails the release here rather
+                // than reaching the registry.
+                for (const k of ["url", "size", "sha256", "signature", "signature_alg"]) {
+                  if (a[k] === undefined || a[k] === null || a[k] === "") {
+                    fail(`artifact ${platform} is missing ${k}`);
+                  }
+                }
+                if (a.sha256 && !/^[0-9a-f]{64}$/.test(a.sha256)) {
+                  fail(`artifact ${platform} sha256 must be 64 lowercase hex chars`);
+                }
+                if (a.size !== undefined && !(Number.isInteger(a.size) && a.size > 0)) {
+                  fail(`artifact ${platform} size must be a positive integer`);
+                }
+              }
+            }
+
+            for (const c of j.composition ?? []) {
+              for (const k of ["id", "project", "kind", "version"]) {
+                if (!c[k]) fail(`composition entry missing ${k}: ${JSON.stringify(c)}`);
+              }
+              // Never `latest`. A runtime dependency resolved at publish time is not
+              // reproducible, and reproducibility is the entire point of recording composition.
+              if (String(c.version).toLowerCase() === "latest") {
+                fail(`composition ${c.id} is pinned to "latest" — pin an exact version`);
+              }
+            }
+          ' "$MANIFEST"
+
+      - name: Verify every pinned dependency exists
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          MANIFEST="${{ inputs.manifest-path }}"
+          KV="${{ secrets.CLOUDFLARE_UPDATE_KV_ID }}"
+
+          # Refuse to publish an application release that references a project release which
+          # does not exist. Catching it here turns a broken client update into a failed build.
+          COUNT=$(node -e 'const j=require(require("path").resolve(process.argv[1]));console.log((j.composition??[]).length)' "$MANIFEST")
+          if [ "$COUNT" = "0" ]; then
+            echo "No composition declared; nothing to resolve."
+            exit 0
+          fi
+
+          FAILED=0
+          while IFS=$'\t' read -r ID PROJECT VERSION ABI; do
+            KEY="projects/${PROJECT}/releases/${VERSION}"
+            echo "resolving ${ID} -> ${KEY}"
+
+            if ! OUT=$(npx wrangler kv key get --namespace-id="$KV" --remote "$KEY" 2>/dev/null); then
+              echo "::error::dependency ${ID} pins ${PROJECT} ${VERSION}, which is not published (${KEY})"
+              FAILED=1
+              continue
+            fi
+
+            # A dependency can be SemVer-compatible and still ABI-break. When both sides declare
+            # an ABI generation, a mismatch is a hard stop — this is the specific failure mode
+            # that makes native libraries dangerous to update by version number alone.
+            if [ -n "$ABI" ] && [ "$ABI" != "null" ]; then
+              DECLARED=$(printf '%s' "$OUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).abi_version ?? "")}catch{console.log("")}})')
+              if [ -n "$DECLARED" ] && [ "$DECLARED" != "$ABI" ]; then
+                echo "::error::ABI mismatch for ${ID}: application wants ${ABI}, ${PROJECT} ${VERSION} declares ${DECLARED}"
+                FAILED=1
+              fi
+            fi
+          done < <(node -e '
+            const j = require(require("path").resolve(process.argv[1]));
+            for (const c of j.composition ?? []) {
+              process.stdout.write(`${c.id}\t${c.project}\t${c.version}\t${c.abi_version ?? ""}\n`);
+            }
+          ' "$MANIFEST")
+
+          [ "$FAILED" = "0" ] || { echo "::error::dependency resolution failed"; exit 1; }
+
+      - name: Build the release object
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .update/out
+          node -e '
+            const fs = require("fs");
+            const m = require(require("path").resolve(process.argv[1]));
+            const [appId, component, runtime, channel, version, releaseUrl, publishedAt] =
+              process.argv.slice(2);
+
+            const release = {
+              app_id: appId,
+              component,
+              runtime,
+              channel,
+              version,
+              published_at: publishedAt || new Date().toISOString(),
+              github_release: releaseUrl || null,
+              minimum_version: m.minimum_version ?? null,
+              mandatory: m.mandatory ?? false,
+              action: m.action ?? "notify",
+              composition: m.composition ?? [],
+              artifacts: m.artifacts,
+            };
+
+            fs.writeFileSync(".update/out/release.json", JSON.stringify(release, null, 2) + "\n");
+
+            // The channel pointer is DENORMALIZED: it carries the resolved answer for every
+            // platform so a client check costs one KV read, and a rollback stays a single
+            // atomic write. `release_key` is a back-reference for audit, not a second lookup.
+            const pointer = {
+              runtime,
+              version,
+              release_key: `applications/${appId}/${component}/releases/${version}`,
+              minimum_version: release.minimum_version,
+              mandatory: release.mandatory,
+              action: release.action,
+              composition: release.composition,
+              artifacts: release.artifacts,
+            };
+            fs.writeFileSync(".update/out/pointer.json", JSON.stringify(pointer, null, 2) + "\n");
+          ' "${{ inputs.manifest-path }}" \
+            "${{ inputs.app-id }}" "${{ inputs.component }}" "${{ inputs.runtime }}" \
+            "${{ inputs.channel }}" "${{ steps.resolve.outputs.version }}" \
+            "${{ github.event.release.html_url }}" "${{ github.event.release.published_at }}"
+
+      - name: Publish the immutable release object
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          KEY="applications/${{ inputs.app-id }}/${{ inputs.component }}/releases/${{ steps.resolve.outputs.version }}"
+          npx wrangler kv key put --namespace-id="${{ secrets.CLOUDFLARE_UPDATE_KV_ID }}" --remote \
+            "$KEY" --path=.update/out/release.json
+          echo "published $KEY"
+
+      - name: Promote the channel pointer
+        id: promote
+        if: inputs.promote
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          KEY="applications/${{ inputs.app-id }}/${{ inputs.component }}/channels/${{ inputs.channel }}/latest"
+          npx wrangler kv key put --namespace-id="${{ secrets.CLOUDFLARE_UPDATE_KV_ID }}" --remote \
+            "$KEY" --path=.update/out/pointer.json
+          echo "promoted $KEY -> ${{ steps.resolve.outputs.version }}"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Update metadata published"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| application | \`${{ inputs.app-id }}/${{ inputs.component }}\` |"
+            echo "| version | \`${{ steps.resolve.outputs.version }}\` |"
+            echo "| channel | \`${{ inputs.channel }}\` |"
+            echo "| promoted | ${{ inputs.promote }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ inputs.promote }}" != "true" ]; then
+            {
+              echo
+              echo "> Published but **not promoted** — no client resolves this version yet."
+              echo "> Promote with \`reusable-update-promote.yml\` when ready."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

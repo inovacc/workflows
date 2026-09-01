@@ -79,6 +79,17 @@ jobs:
 | [reusable-rust-check.yml](#rust-check) | Parallel quality checks | Run rustfmt, tests, and Clippy with Cargo caching |
 | [reusable-rust-build.yml](#rust-build) | Release builds | Build host or target-specific release artifacts in parallel |
 
+### Update Distribution Workflows
+
+Publish release metadata to the inovacc update control plane (Cloudflare KV) so deployed
+applications learn an update exists. GitHub remains the source of truth for binaries; KV holds
+only the catalogue and the pointer to what is live.
+
+| Workflow | Purpose | Use Case |
+|----------|---------|----------|
+| [reusable-update-publish.yml](#update-publish) | Publish release metadata | Write an immutable release object and optionally promote the channel |
+| [reusable-update-promote.yml](#update-promote) | Move a channel pointer | Staged rollout promotion, and **rollback** |
+
 ---
 
 ## Workflow Documentation
@@ -571,6 +582,141 @@ jobs:
 - Performance metrics in job summary
 
 ---
+
+---
+
+## Update Distribution
+
+Contract and rationale: `inovacc/knowledge_base` -> `updater/docs/protocol/PROTOCOL-v1.md`.
+
+Two objects are written per release:
+
+```
+applications/<app>/<component>/releases/<version>    immutable  - the audit record
+applications/<app>/<component>/channels/<ch>/latest  mutable    - what clients resolve
+```
+
+Because release objects are immutable and only the pointer moves, **rollback is a pointer move**
+- no rebuild, no re-sign, no republish.
+
+### Update Publish
+
+Runs on `release: published`. The caller produces a manifest describing its built artifacts;
+this workflow validates it, resolves pinned dependencies, and writes to KV.
+
+```yaml
+name: Publish update
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    uses: inovacc/workflows/.github/workflows/reusable-update-publish.yml@main
+    with:
+      app-id: ambercapture
+      component: desktop
+      runtime: tauri
+      channel: stable
+    secrets: inherit
+```
+
+| Input | Type | Default | Description |
+|-------|------|---------|-------------|
+| `app-id` | string | required | `^[a-z0-9][a-z0-9-]{0,63}$` |
+| `component` | string | `desktop` | `desktop` / `daemon` / `cli` / `service` |
+| `runtime` | string | required | `tauri` / `service` / `cli` |
+| `channel` | string | `stable` | `stable` / `beta` / `nightly` / `canary` |
+| `version` | string | tag minus `v` | SemVer, no leading `v` |
+| `manifest-path` | string | `.update/release.json` | Caller-produced artifact manifest |
+| `promote` | boolean | `true` | Move the channel pointer. `false` for a staged rollout |
+
+Secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_UPDATE_KV_ID`.
+
+Scope the API token to **Workers KV Storage: Edit** and nothing more. Application HMAC secrets
+and the response-signing key belong to the Worker and must never be given to CI - publishing
+metadata does not require the keys the service uses.
+
+#### The manifest the caller produces
+
+```json
+{
+  "minimum_version": "2.0.0",
+  "mandatory": false,
+  "action": "notify",
+  "composition": [
+    { "id": "capture-core", "project": "capture-core", "kind": "shared_library",
+      "version": "1.8.3", "abi_version": 4, "required": true }
+  ],
+  "artifacts": {
+    "windows-x86_64": {
+      "filename": "AmberCapture_2.4.0_x64-setup.exe",
+      "url": "https://github.com/.../AmberCapture_2.4.0_x64-setup.exe",
+      "size": 48213504,
+      "sha256": "<64 lowercase hex>",
+      "signature": "<detached signature>",
+      "signature_alg": "minisign-ed25519"
+    }
+  }
+}
+```
+
+#### What it refuses to publish
+
+These are hard failures, deliberately - each one would otherwise become a broken client update:
+
+- **An incomplete artifact.** Every platform entry needs `url`, `size`, `sha256`, `signature`
+  and `signature_alg`. Announcing an update a client cannot verify is worse than announcing
+  nothing.
+- **A dependency pinned to `latest`.** Composition exists for reproducibility; a floating
+  dependency destroys it.
+- **A dependency that is not published.** Every `composition` entry is resolved against
+  `projects/<project>/releases/<version>` before anything is written.
+- **An ABI mismatch.** When both the application and the project declare an `abi_version`, a
+  disagreement stops the release. A native library can be SemVer-compatible and still ABI-break,
+  which is exactly the failure that version numbers alone do not catch.
+- **A leading `v` on the version**, or anything that is not SemVer 2.0.0.
+
+### Update Promote
+
+Moves a channel pointer to an already-published version. This is both staged-rollout promotion
+and the rollback path.
+
+```yaml
+name: Rollback
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to point stable at
+        required: true
+        type: string
+
+jobs:
+  rollback:
+    uses: inovacc/workflows/.github/workflows/reusable-update-promote.yml@main
+    with:
+      app-id: ambercapture
+      runtime: tauri
+      version: ${{ inputs.version }}
+    secrets: inherit
+```
+
+| Input | Type | Default | Description |
+|-------|------|---------|-------------|
+| `app-id` | string | required | |
+| `component` | string | `desktop` | |
+| `channel` | string | `stable` | |
+| `version` | string | required | Must already be published |
+| `runtime` | string | required | Checked against the release object |
+
+Outputs `previous-version`, so the run records what was live before it.
+
+It verifies the target release exists before repointing - a pointer to a missing release makes
+every client resolve `unknown` and stop updating, which is a self-inflicted outage - and reads
+the pointer back afterwards, because KV is eventually consistent and a zero exit code is not
+evidence clients will see the change.
+
 
 ## Complete Examples
 
