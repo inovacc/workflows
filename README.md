@@ -629,9 +629,37 @@ jobs:
 | `channel` | string | `stable` | `stable` / `beta` / `nightly` / `canary` |
 | `version` | string | tag minus `v` | SemVer, no leading `v` |
 | `manifest-path` | string | `.update/release.json` | Caller-produced artifact manifest |
+| `manifest-from-assets` | boolean | `false` | Build the manifest FROM the release's own uploaded assets instead |
 | `promote` | boolean | `true` | Move the channel pointer. `false` for a staged rollout |
 
 Secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_UPDATE_KV_ID`.
+Plus `RELEASE_SIGNING_SEED` when `manifest-from-assets` is enabled.
+
+#### `manifest-from-assets` - zero build changes
+
+Most repositories already attach built binaries to their GitHub releases. Rather than asking
+every one of them to also emit a hand-rolled manifest, set `manifest-from-assets: true` and the
+workflow derives it:
+
+1. Lists the triggering release's assets.
+2. Skips metadata-shaped ones (`.txt`, `.json`, `.sig`, `.sha256`, `.sbom`, ...) and names each
+   skip in the log, so nothing disappears silently.
+3. Classifies the rest by filename into `<os>-<arch>` - `windows|darwin|linux` x
+   `x86_64|aarch64`.
+4. Downloads each one, computes `sha256` over the **exact bytes clients will receive**, and
+   signs them with `RELEASE_SIGNING_SEED`.
+
+Name binaries with an os and an arch token and it just works:
+`myapp-1.2.3-windows-x86_64.exe`, `myapp-1.2.3-linux-aarch64.tar.gz`.
+
+It fails rather than guessing when: no asset maps to any platform, two assets map to the *same*
+platform, a download's byte count disagrees with the release API, or the seed is missing or is
+not 32 bytes. Each of those would otherwise produce an artifact map that looks fine and is
+wrong.
+
+The public key is printed in the job log on every run - that is the value clients pin to verify
+downloads. It is the **artifact** trust layer and must never be the same key as the control
+plane's response-signing seed: compromising the service must not be sufficient to ship code.
 
 Scope the API token to **Workers KV Storage: Edit** and nothing more. Application HMAC secrets
 and the response-signing key belong to the Worker and must never be given to CI - publishing

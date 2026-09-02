@@ -50,6 +50,18 @@ on:
         description: >-
           Caller-produced JSON carrying `artifacts` (keyed by <os>-<arch>) and optionally
           `composition`, `minimum_version`, `mandatory` and `action`.
+      manifest-from-assets:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          Build .update/release.json FROM the published GitHub release's own uploaded assets:
+          download each binary asset, compute sha256 and size, sign it with
+          RELEASE_SIGNING_SEED, and classify its platform from the filename. Lets any repo that
+          attaches binaries to its releases publish update metadata with zero build changes.
+          Non-binary assets (checksums, .sig, .json, .txt, .sbom) are skipped and named in the
+          log; a release whose assets yield no platform at all fails rather than publishing an
+          empty artifact map.
       promote:
         required: false
         type: boolean
@@ -60,6 +72,13 @@ on:
         type: number
         default: 15
     secrets:
+      RELEASE_SIGNING_SEED:
+        required: false
+        description: >-
+          base64 32-byte Ed25519 seed; required when manifest-from-assets is true. Signs each
+          artifact so clients can verify against a pinned per-app public key. This is the
+          ARTIFACT trust layer (ADR-0001) — never the same key as the control plane's
+          response-signing seed.
       CLOUDFLARE_API_TOKEN:
         required: true
       CLOUDFLARE_ACCOUNT_ID:
@@ -122,6 +141,105 @@ jobs:
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Publishing ${{ inputs.app-id }}/${{ inputs.component }} $VERSION to ${{ inputs.channel }}"
+
+      - name: Build the manifest from release assets
+        if: inputs.manifest-from-assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SEED_B64: ${{ secrets.RELEASE_SIGNING_SEED }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SEED_B64:-}" ]; then
+            echo "::error::manifest-from-assets requires the RELEASE_SIGNING_SEED secret — every published artifact must carry a real signature, and the pipeline refuses unsigned ones by design."
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" != "release" ]; then
+            echo "::error::manifest-from-assets reads the triggering release's assets, so it only works on release events."
+            exit 1
+          fi
+
+          mkdir -p .update/assets
+          gh api "repos/${{ github.repository }}/releases/${{ github.event.release.id }}/assets"             --paginate > .update/assets/list.json
+
+          node -e '
+            const fs = require("fs");
+            const assets = JSON.parse(fs.readFileSync(".update/assets/list.json", "utf8"));
+            // Skip metadata-shaped assets; only binaries become artifacts.
+            const skip = /\.(txt|json|sig|minisig|asc|pem|sbom|yml|yaml|md|sha256|sha256sum)$/i;
+            const os_of = (n) =>
+              /(windows|win(32|64)?)[._-]/i.test(n + "-") || /\.(exe|msi)$/i.test(n) ? "windows"
+              : /(darwin|macos|mac|apple)/i.test(n) ? "darwin"
+              : /linux/i.test(n) ? "linux" : null;
+            const arch_of = (n) =>
+              /(aarch64|arm64)/i.test(n) ? "aarch64"
+              : /(x86_64|amd64|x64)/i.test(n) ? "x86_64" : null;
+            const out = [];
+            for (const a of assets) {
+              if (skip.test(a.name)) { console.log(`skip (metadata): ${a.name}`); continue; }
+              const os = os_of(a.name), arch = arch_of(a.name);
+              if (!os || !arch) { console.log(`skip (no platform in name): ${a.name}`); continue; }
+              out.push({ name: a.name, url: a.browser_download_url, size: a.size,
+                         api_url: a.url, platform: `${os}-${arch}` });
+            }
+            if (!out.length) {
+              console.log("::error::no release asset matched an <os>-<arch> platform — nothing to publish. Name binaries with an os and arch token (e.g. myapp-1.2.3-windows-x86_64.exe).");
+              process.exit(1);
+            }
+            const seen = {};
+            for (const o of out) {
+              if (seen[o.platform]) {
+                console.log(`::error::two assets map to ${o.platform}: ${seen[o.platform]} and ${o.name} — ambiguous, refusing to guess.`);
+                process.exit(1);
+              }
+              seen[o.platform] = o.name;
+            }
+            fs.writeFileSync(".update/assets/selected.json", JSON.stringify(out, null, 2));
+            for (const o of out) console.log(`artifact: ${o.platform} <- ${o.name} (${o.size} bytes)`);
+          '
+
+          # Download each selected asset and hash+sign the exact bytes clients will receive.
+          node -e '
+            const sel = JSON.parse(require("fs").readFileSync(".update/assets/selected.json","utf8"));
+            for (const o of sel) console.log(`${o.api_url}	${o.name}`);
+          ' | while IFS=$'	' read -r API NAME; do
+            gh api -H "Accept: application/octet-stream" "${API#https://api.github.com/}" > ".update/assets/$NAME"
+          done
+
+          node -e '
+            const c = require("crypto"), fs = require("fs");
+            const sel = JSON.parse(fs.readFileSync(".update/assets/selected.json", "utf8"));
+            const seed = Buffer.from(process.env.SEED_B64.trim(), "base64");
+            if (seed.length !== 32) {
+              console.log(`::error::RELEASE_SIGNING_SEED must be a base64 32-byte Ed25519 seed, got ${seed.length} bytes`);
+              process.exit(1);
+            }
+            const key = c.createPrivateKey({
+              key: Buffer.concat([Buffer.from("302e020100300506032b657004220420","hex"), seed]),
+              format: "der", type: "pkcs8",
+            });
+            const artifacts = {};
+            for (const o of sel) {
+              const bytes = fs.readFileSync(`.update/assets/${o.name}`);
+              if (bytes.length !== o.size) {
+                console.log(`::error::${o.name}: downloaded ${bytes.length} bytes but the release API says ${o.size} — refusing to sign a mismatch.`);
+                process.exit(1);
+              }
+              artifacts[o.platform] = {
+                filename: o.name,
+                url: o.url,
+                size: o.size,
+                sha256: c.createHash("sha256").update(bytes).digest("hex"),
+                signature: c.sign(null, bytes, key).toString("base64url"),
+                signature_alg: "ed25519",
+              };
+            }
+            fs.writeFileSync(process.argv[1], JSON.stringify({ artifacts }, null, 2) + "\n");
+            const pub = c.createPublicKey(key).export({format:"der",type:"spki"}).subarray(-32).toString("base64");
+            console.log(`signed ${Object.keys(artifacts).length} artifact(s); public key (pin this in clients): ${pub}`);
+          ' "${{ inputs.manifest-path }}"
+
+          rm -rf .update/assets
 
       - name: Validate the manifest
         shell: bash
